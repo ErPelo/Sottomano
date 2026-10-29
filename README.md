@@ -5,6 +5,8 @@
 <p align="center"><b>Gli strumenti che ti servono sui file, a portata di mano.</b><br>
 Per Windows 10 e 11 · gratis e open source · versione 0.1 (beta)</p>
 
+https://github.com/user-attachments/assets/ccde1cd5-2365-4cde-a405-3ca91fe6a6ac
+
 ---
 
 Sottomano aggiunge due cose a Esplora file e al desktop:
