@@ -1,0 +1,60 @@
+<#<!--
+  Questo file e' due cose insieme:
+  - per PowerShell (irm ... | iex) e' lo script che installa o aggiorna Sottomano;
+  - per il browser e' una pagina che spiega come installarlo.
+  Lo script e' la parte qui sotto tra le due righe di commento PowerShell: leggila pure.
+-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sottomano - installazione</title>
+<style>
+  body { margin: 0; background: #14161f; color: transparent; font-family: "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 20px; color: #e6e6e6; }
+  h1 { font-size: 40px; margin: 12px 0 4px; }
+  p { color: #b9bfd6; line-height: 1.6; }
+  pre { background: #1e2130; color: #fff; padding: 16px 18px; border-radius: 10px; overflow-x: auto;
+        font-size: 16px; border: 1px solid #2f3448; }
+  a { color: #4cc2ff; }
+  img { width: 96px; height: 96px; }
+  .nota { font-size: 14px; color: #8d93ab; }
+</style>
+<div hidden>
+#>
+
+# ============ Sottomano: scarica l'ultima versione da GitHub e avvia installa.bat ============
+# Copyright (C) 2026 Tommaso Pelosin - Licenza AGPL-3.0 - https://github.com/ErPelo/Sottomano
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+Write-Host ''
+Write-Host 'Sottomano: scarico l''ultima versione da GitHub...' -ForegroundColor Cyan
+$cartella = Join-Path $env:TEMP 'sottomano-installazione'
+if (Test-Path $cartella) { Remove-Item $cartella -Recurse -Force }
+New-Item -ItemType Directory -Path $cartella | Out-Null
+$zip = Join-Path $cartella 'sottomano.zip'
+Invoke-WebRequest -Uri 'https://github.com/ErPelo/Sottomano/archive/refs/heads/main.zip' -OutFile $zip -UseBasicParsing
+Expand-Archive -Path $zip -DestinationPath $cartella -Force
+$bat = Get-ChildItem -Path $cartella -Filter 'installa.bat' -Recurse | Select-Object -First 1
+if (-not $bat) { throw 'installa.bat non trovato nello zip scaricato.' }
+Write-Host 'Avvio l''installazione (le domande compaiono qui sotto)...' -ForegroundColor Cyan
+Push-Location $bat.DirectoryName
+try { & $bat.FullName } finally { Pop-Location }
+
+<#
+</div>
+<main>
+  <img src="https://raw.githubusercontent.com/ErPelo/Sottomano/main/logo.png" alt="">
+  <h1>Sottomano</h1>
+  <p>Gli strumenti che ti servono sui file, a portata di mano. Gratis e open source, per Windows 10 e 11.</p>
+  <h2>Installa o aggiorna con un comando</h2>
+  <p>Apri <b>PowerShell</b> (Start, scrivi <i>PowerShell</i>, Invio) e incolla:</p>
+  <pre>irm erpelo.github.io/Sottomano | iex</pre>
+  <p>Oppure, dal <b>Prompt dei comandi</b> (cmd):</p>
+  <pre>cd /d %TEMP% &amp;&amp; curl -L -o sottomano.zip https://github.com/ErPelo/Sottomano/archive/refs/heads/main.zip &amp;&amp; tar -xf sottomano.zip &amp;&amp; Sottomano-main\installa.bat</pre>
+  <p class="nota">Il comando scarica l'ultima versione da GitHub e avvia <code>installa.bat</code>: lo stesso comando serve
+     sia per installare sia per aggiornare. Questa pagina è anche lo script che PowerShell esegue: puoi leggerlo
+     <a href="https://github.com/ErPelo/Sottomano/blob/main/docs/index.html">qui</a>.</p>
+  <p><a href="https://github.com/ErPelo/Sottomano">Codice, istruzioni e video su GitHub</a></p>
+</main>
+<!--
+#>
