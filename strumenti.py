@@ -812,9 +812,9 @@ def chiedi_blocco(nome, cartella=False):
     esito = {"v": None}
     etichetta(root, f"Blocca «{nome}»", k, FG, 11, True, wraplength=L, justify="left").pack(
         anchor="w", padx=pad, pady=(pad, int(4 * k)))
-    cosa = "La cartella resta dov'è, con il suo nome, ma non si apre (e il contenuto non si legge)" if cartella \
-        else "Il file resta dov'è, con il suo nome, ma non si apre"
-    etichetta(root, cosa + " finché non scrivi la password. Non si può nemmeno spostare o eliminare.",
+    cosa = "la cartella" if cartella else "il file"
+    etichetta(root, f"Al suo posto resta un collegamento con lo stesso nome: il doppio clic chiede la password "
+                    f"e poi apre {cosa}. Intanto Sottomano lo custodisce bloccato nella sua cartella.",
               k, wraplength=L, justify="left").pack(anchor="w", padx=pad, pady=(0, int(12 * k)))
     etichetta(root, "Password", k).pack(anchor="w", padx=pad, pady=(0, int(4 * k)))
     e1 = campo(root, k, 34, show="•")
@@ -822,7 +822,7 @@ def chiedi_blocco(nome, cartella=False):
     etichetta(root, "Ripeti la password", k).pack(anchor="w", padx=pad, pady=(int(10 * k), int(4 * k)))
     e2 = campo(root, k, 34, show="•")
     e2.pack(anchor="w", padx=pad, ipady=int(3 * k))
-    etichetta(root, "Per aprirlo: doppio clic, Invio o Spazio, poi la password. Quando lo chiudi si riblocca da solo.\n"
+    etichetta(root, "Quando lo chiudi si riblocca da solo.\n"
                     "Non dimenticare la password: senza, Sottomano non lo sblocca e non si può disinstallare.",
               k, "#ffd479", wraplength=L, justify="left").pack(anchor="w", padx=pad, pady=(int(12 * k), 0))
     avviso = etichetta(root, "", k, ERRORE)
@@ -1437,4 +1437,62 @@ def duplicati(cartella, al_cestino):
 
     mostra(root, int(760 * k), int(620 * k), ridimensionabile=True)
     root.after(100, controlla)
+    root.mainloop()
+
+
+# ===================================================================== elementi bloccati
+def elenco_bloccati(leggi_voci, apri, completo, ricrea):
+    """Tutti gli elementi bloccati con Sottomano, anche se ne hai cancellato il collegamento."""
+    import os as _os
+    root, k = finestra("Elementi bloccati")
+    pad = int(16 * k)
+    etichetta(root, "Elementi bloccati con Sottomano", k, FG, 11, True).pack(anchor="w", padx=pad, pady=(pad, int(2 * k)))
+    etichetta(root, "Anche se cancelli un collegamento per sbaglio, l'elemento resta qui al sicuro.", k).pack(
+        anchor="w", padx=pad)
+    corpo = tk.Frame(root, bg=BG)
+    corpo.pack(fill="both", expand=True, padx=pad, pady=(int(10 * k), 0))
+    giu = tk.Frame(root, bg=BG)
+    giu.pack(fill="x", padx=pad, pady=pad)
+    Chip(giu, "Chiudi", root.destroy, k).pack(side="right")
+    root.bind("<Escape>", lambda e: root.destroy())
+
+    def esegui(azione, v):
+        try:
+            azione(v)
+        except Exception as e:
+            etichetta(corpo, f"Errore: {e}", k, ERRORE).pack(anchor="w")
+        try:
+            disegna()
+        except tk.TclError:
+            pass
+
+    def disegna():
+        for w in corpo.winfo_children():
+            w.destroy()
+        voci = leggi_voci()
+        if not voci:
+            etichetta(corpo, "Nessun elemento bloccato.", k, FG, 10).pack(pady=int(30 * k))
+            return
+        lista = Scorrevole(corpo, k)
+        lista.pack(fill="both", expand=True)
+        for v in sorted(voci, key=lambda x: Path(x.get("origine") or x["percorso"]).name.lower()):
+            dove = Path(v.get("origine") or v["percorso"])
+            riga = tk.Frame(lista.dentro, bg=BARRA)
+            riga.pack(fill="x", pady=(0, int(6 * k)))
+            sx = tk.Frame(riga, bg=BARRA)
+            sx.pack(side="left", fill="x", expand=True, padx=int(12 * k), pady=int(8 * k))
+            stato = "Bloccato" if v["stato"] == "bloccato" else "Aperto (si richiude quando lo chiudi)"
+            tk.Label(sx, text=("📁  " if v.get("cartella") else "📄  ") + dove.name, bg=BARRA, fg=FG,
+                     font=("Segoe UI", 10, "bold"), anchor="w").pack(anchor="w")
+            tk.Label(sx, text=f"{stato}  ·  in {dove.parent}", bg=BARRA, fg=SUB, font=("Segoe UI", 8),
+                     anchor="w").pack(anchor="w")
+            dx = tk.Frame(riga, bg=BARRA)
+            dx.pack(side="right", padx=int(10 * k))
+            Chip(dx, "Sblocco completo", lambda v=v: esegui(completo, v), k).pack(side="right", padx=int(3 * k))
+            Chip(dx, "Apri", lambda v=v: esegui(apri, v), k, primario=True).pack(side="right", padx=int(3 * k))
+            if v.get("origine") and not _os.path.exists(v.get("collegamento", "")):
+                Chip(dx, "Rimetti il collegamento", lambda v=v: esegui(ricrea, v), k).pack(side="right", padx=int(3 * k))
+
+    disegna()
+    mostra(root, int(720 * k), int(460 * k), ridimensionabile=True)
     root.mainloop()

@@ -1234,16 +1234,55 @@ def blocca_file(files):
 
 
 def sblocca_e_apri(files, anteprima=False):
+    """Password (se serve), poi apre l'elemento vero: nel suo programma o nell'anteprima."""
     import blocco
     p = files[0]
-    if blocco.stato(p) == "bloccato":
-        if not _chiedi_finche_giusta(p, "Sblocca", lambda pw: blocco.apri(p, pw)):
+    v = blocco.voce(p)
+    if v is None:
+        reale = p
+    elif v["stato"] == "bloccato":
+        esito = {}
+
+        def prova(pw):
+            esito["p"] = blocco.apri(p, pw)
+            return esito["p"] is not None
+        if not _chiedi_finche_giusta(v.get("origine") or p, "Sblocca", prova):
             return None
-    if anteprima:
-        apri_anteprima(p)
+        reale = esito["p"]
     else:
-        os.startfile(p)
+        reale = v["percorso"]
+    if anteprima:
+        apri_anteprima(reale)
+    else:
+        os.startfile(reale)
     return None
+
+
+def apri_bloccato(files):
+    """Doppio clic sul collegamento di un elemento bloccato (files[0] = il suo codice)."""
+    import blocco
+    v = blocco.per_id(files[0])
+    if v is None:
+        info("Questo collegamento non serve più: l'elemento non è più bloccato da Sottomano.\n"
+             "Se l'hai sbloccato del tutto, lo trovi al suo posto originale.")
+        return None
+    return sblocca_e_apri([v["percorso"]])
+
+
+def elenco_bloccati(files=None):
+    """Finestra con tutti gli elementi bloccati (anche se ne hai cancellato il collegamento)."""
+    import blocco
+    import strumenti
+
+    def apri(v):
+        sblocca_e_apri([v["percorso"]])
+
+    def completo(v):
+        return togli_blocco([v["percorso"]])
+
+    def ricrea(v):
+        blocco.ricrea_collegamento(v["percorso"])
+    strumenti.elenco_bloccati(lambda: list(blocco.leggi().values()), apri, completo, ricrea)
 
 
 def richiudi_file(files):
@@ -1253,13 +1292,25 @@ def richiudi_file(files):
 
 
 def togli_blocco(files):
+    """Sblocco completo: per sempre, e l'elemento torna al suo posto al posto del collegamento."""
     import blocco
+    rimessi = []
     for f in files:
-        if blocco.stato(f) == "bloccato":
-            if not _chiedi_finche_giusta(f, "Sblocco completo", lambda pw, f=f: blocco.togli(f, pw)):
+        v = blocco.voce(f)
+        if v is None:
+            continue
+        esito = {}
+
+        def prova(pw, f=f):
+            esito["p"] = blocco.togli(f, pw)
+            return esito["p"] is not False
+        if v["stato"] == "bloccato":
+            if not _chiedi_finche_giusta(v.get("origine") or f, "Sblocco completo", prova):
                 return None
         else:
-            blocco.togli(f)
+            esito["p"] = blocco.togli(f)
+        if isinstance(esito.get("p"), str):
+            rimessi.append(esito["p"])
     return None
 
 
@@ -1681,6 +1732,8 @@ AZIONI = {
     "sblocca_vedi":   lambda fs: sblocca_e_apri(fs, anteprima=True),
     "richiudi":       richiudi_file,
     "togli_blocco":   togli_blocco,
+    "apri_bloccato":  apri_bloccato,
+    "bloccati_elenco": elenco_bloccati,
     "crea_zip":       lambda fs: crea_archivio(fs, "zip"),
     "crea_7z":        lambda fs: crea_archivio(fs, "7z"),
     "pdf_dividi":     pdf_dividi,
@@ -1692,7 +1745,7 @@ AZIONI = {
     "sottotitoli":    sottotitoli,
     "duplicati":      trova_duplicati,
 }
-SENZA_FILE = {"zona", "qr_crea", "duplicati"}      # azioni che funzionano anche senza file selezionati
+SENZA_FILE = {"zona", "qr_crea", "duplicati", "bloccati_elenco"}      # azioni che funzionano anche senza file selezionati
 
 
 # ===================================================== menu rapido (Ctrl+Alt+S)
@@ -1965,9 +2018,8 @@ def voci_per(files):
     if "bloccato" in stati:            # bloccato: si puo' solo sbloccare
         return [("Sblocco completo…", "togli_blocco"), ("Sblocco parziale (apri)…", "sblocca_apri")]
     if stati == {"aperto"}:            # sblocco parziale in corso: si richiude da solo quando lo chiudi
-        normali = [v for v in _voci_normali(files) if v is None or v[1] != "blocca"]
-        return [("Sblocco completo", "togli_blocco"), ("Blocca subito", "richiudi"),
-                ("Cambia password…", "blocca"), None] + normali
+        return [("Apri", "sblocca_apri"), None, ("Sblocco completo", "togli_blocco"),
+                ("Blocca subito", "richiudi"), ("Cambia password…", "blocca")]
     return _voci_normali(files)
 
 
@@ -2386,10 +2438,12 @@ class SpazioAnteprima:
         if not files:
             self._ripassa(vk)
             return
-        bloccato = False
+        bloccato = protetto = False
         try:
             import blocco
-            bloccato = blocco.stato(files[0]) == "bloccato"
+            v = blocco.voce(files[0])
+            protetto = v is not None
+            bloccato = protetto and v["stato"] == "bloccato"
         except Exception:
             log(f"--- tasto blocco\n{traceback.format_exc()}")
         if vk == self.VK_INVIO:
@@ -2398,7 +2452,7 @@ class SpazioAnteprima:
             else:
                 self._ripassa(vk)                               # Invio normale di Esplora file
             return
-        lavoratore.invia(["sblocca_vedi" if bloccato else "anteprima", files[0]])
+        lavoratore.invia(["sblocca_vedi" if protetto else "anteprima", files[0]])
 
     # ---------------------------------------------------------- doppio clic
     def _forse_accesso_negato(self, hwnd):
@@ -2543,7 +2597,7 @@ def ascolta():
         return
 
     WM_TRAY = win32con.WM_USER + 20
-    ID_HOTKEY, ID_SPAZIO, ID_ZONA, ID_INVIO, ID_ESCI, ID_TESTO = 1, 2, 3, 4, 1000, 1001
+    ID_HOTKEY, ID_SPAZIO, ID_ZONA, ID_INVIO, ID_ESCI, ID_TESTO, ID_BLOCCATI = 1, 2, 3, 4, 1000, 1001, 1002
     lavoratore = None
 
     def menu_icona(hwnd):
@@ -2551,6 +2605,7 @@ def ascolta():
         win32gui.AppendMenu(m, win32con.MF_STRING | win32con.MF_GRAYED, 0, f"Sottomano {VERSIONE}  ·  Ctrl+Alt+{TASTO} menu  ·  Spazio anteprima")
         win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
         win32gui.AppendMenu(m, win32con.MF_STRING, ID_TESTO, "Testo da una zona dello schermo\tCtrl+Alt+T")
+        win32gui.AppendMenu(m, win32con.MF_STRING, ID_BLOCCATI, "Elementi bloccati…")
         win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
         win32gui.AppendMenu(m, win32con.MF_STRING, ID_ESCI, "Esci")
         x, y = win32gui.GetCursorPos()
@@ -2562,6 +2617,8 @@ def ascolta():
             win32gui.DestroyWindow(hwnd)
         elif scelta == ID_TESTO:
             lavoratore.invia(["zona"])
+        elif scelta == ID_BLOCCATI:
+            lavoratore.invia(["bloccati_elenco"])
 
     def on_tray(hwnd, msg, wparam, lparam):
         if lparam in (win32con.WM_RBUTTONUP, win32con.WM_LBUTTONUP):
@@ -2598,6 +2655,27 @@ def ascolta():
         win32gui.PostQuitMessage(0)
         return 0
 
+    def on_copydata(hwnd, msg, wparam, lparam):
+        """Messaggio da apri_bloccato.pyw (doppio clic sul collegamento di un elemento bloccato):
+        uso il processo gia' pronto, cosi' la finestra della password compare subito."""
+        import ctypes
+        import re
+
+        class COPYDATA(ctypes.Structure):
+            _fields_ = [("dwData", ctypes.c_size_t), ("cbData", ctypes.c_ulong), ("lpData", ctypes.c_void_p)]
+        try:
+            cd = COPYDATA.from_address(lparam)
+            if cd.dwData != 0x534D or cd.cbData > 200:
+                return 0
+            comando = json.loads(ctypes.string_at(cd.lpData, cd.cbData).decode("utf-8"))
+            # accetto solo questo comando, con un codice valido: nient'altro arriva da fuori
+            if len(comando) == 2 and comando[0] == "apri_bloccato" and re.fullmatch(r"[0-9a-f]{12}", comando[1]):
+                lavoratore.invia(comando)
+                return 1
+        except Exception:
+            log(f"--- copydata\n{traceback.format_exc()}")
+        return 0
+
     def on_close(hwnd, msg, wparam, lparam):  # usato da disinstalla.py
         win32gui.DestroyWindow(hwnd)
         return 0
@@ -2622,7 +2700,7 @@ def ascolta():
     wc.lpszClassName = CLASSE_SERVIZIO
     wc.hInstance = win32api.GetModuleHandle(None)
     wc.lpfnWndProc = {WM_TRAY: on_tray, win32con.WM_HOTKEY: on_hotkey, win32con.WM_TIMER: on_timer,
-                      win32con.WM_DESTROY: on_destroy, win32con.WM_CLOSE: on_close}
+                      win32con.WM_DESTROY: on_destroy, win32con.WM_CLOSE: on_close, 0x004A: on_copydata}
     win32gui.RegisterClass(wc)
     hwnd = win32gui.CreateWindow(CLASSE_SERVIZIO, "Sottomano", 0, 0, 0, 0, 0, 0, 0, wc.hInstance, None)
 

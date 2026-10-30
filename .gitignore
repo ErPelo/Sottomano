@@ -17,3 +17,6 @@ Desktop.ini
 .vscode/
 .idea/
 modelli/
+bloccati/
+bloccati.json
+bloccati.bak

@@ -2,9 +2,10 @@
 # Sottomano - blocco con password di file e cartelle.
 # Copyright (C) 2026 Tommaso Pelosin - Licenza AGPL-3.0 (vedi LICENSE)
 #
-# Il file (o la cartella) resta dov'e', con lo stesso nome e la stessa icona, ma Windows
-# non lo lascia aprire, leggere, modificare, spostare ne' eliminare: Sottomano aggiunge ai suoi
-# permessi (NTFS) una regola "Nega" per tutti. Con la password giusta Sottomano toglie la regola.
+# L'elemento vero va in una cartella di Sottomano ("bloccati") e al suo posto resta un collegamento
+# con lo stesso nome e la stessa icona: il doppio clic chiede la password e poi apre l'elemento vero.
+# In piu', l'elemento vero ha nei permessi (NTFS) una regola "Nega" per tutti: Windows non lo lascia
+# aprire, leggere, modificare, spostare ne' eliminare. Con la password giusta Sottomano toglie la regola.
 #
 # Le password NON vengono salvate: in bloccati.json c'e' solo un'impronta (PBKDF2-SHA256,
 # 200.000 passaggi) che serve a controllare se la password scritta e' giusta.
@@ -65,12 +66,15 @@ def _impronta(password, sale):
 
 def stato(p, reg=None):
     """'bloccato', 'aperto' (sblocco parziale: si richiude da solo quando lo chiudi) oppure None."""
-    v = (reg if reg is not None else leggi()).get(chiave(p))
-    return v["stato"] if v else None
+    reg = reg if reg is not None else leggi()
+    k = _trova(reg, p)
+    return reg[k]["stato"] if k else None
 
 
 def password_giusta(p, password, reg=None):
-    v = (reg if reg is not None else leggi()).get(chiave(p))
+    reg = reg if reg is not None else leggi()
+    k = _trova(reg, p)
+    v = reg[k] if k else None
     return bool(v) and secrets.compare_digest(_impronta(password, v["sale"]), v["impronta"])
 
 
@@ -124,7 +128,80 @@ else:                                  # solo per provare la logica fuori da Win
         return True
 
 
+def avvisa_esplora(path):
+    """Dico a Esplora file e al desktop che l'elemento e' cambiato. Senza questo, il desktop puo'
+    ricordarsi che 'non si apriva' e continuare a non aprirlo anche dopo lo sblocco."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        sh = ctypes.windll.shell32
+        sh.SHChangeNotify.argtypes = [ctypes.c_long, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_wchar_p]
+        SHCNF_PATHW_NOWAIT = 0x0005 | 0x2000
+        p = os.path.abspath(str(path))
+        if os.path.isdir(p):
+            sh.SHChangeNotify(0x00001000, SHCNF_PATHW_NOWAIT, p, None)       # SHCNE_UPDATEDIR
+        sh.SHChangeNotify(0x00002000, SHCNF_PATHW_NOWAIT, p, None)           # SHCNE_UPDATEITEM
+        sh.SHChangeNotify(0x00000800, SHCNF_PATHW_NOWAIT, p, None)           # SHCNE_ATTRIBUTES
+        sh.SHChangeNotify(0x00001000, SHCNF_PATHW_NOWAIT, os.path.dirname(p), None)
+    except Exception:
+        pass
+    _aggiorna_viste(os.path.dirname(os.path.abspath(str(path))))
+
+
+def _aggiorna_viste(cartella):
+    """Come premere F5 sul desktop e nelle finestre che mostrano quella cartella. Il desktop a volte
+    ignora gli avvisi e tiene in memoria che l'elemento 'non si apriva': cosi' lo rilegge davvero."""
+    import ctypes
+    u = ctypes.windll.user32
+    AGGIORNA = 0x7103                     # il comando "Aggiorna" (F5) delle viste di Esplora file
+    c = os.path.normcase(cartella)
+    try:
+        desktop = {os.path.normcase(os.path.join(os.path.expanduser("~"), "Desktop"))}
+        try:
+            from win32com.shell import shell, shellcon
+            for csidl in (shellcon.CSIDL_DESKTOPDIRECTORY, shellcon.CSIDL_COMMON_DESKTOPDIRECTORY):
+                desktop.add(os.path.normcase(shell.SHGetFolderPath(0, csidl, None, 0)))
+        except Exception:
+            pass
+        if c in desktop:
+            u.FindWindowW.restype = ctypes.c_void_p
+            u.FindWindowExW.restype = ctypes.c_void_p
+            u.FindWindowExW.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p]
+            viste = []
+            progman = u.FindWindowW("Progman", None)
+            v = u.FindWindowExW(progman, None, "SHELLDLL_DefView", None)
+            if v:
+                viste.append(v)
+            w = u.FindWindowExW(None, None, "WorkerW", None)
+            while w:                          # con alcuni sfondi il desktop sta dentro una WorkerW
+                v = u.FindWindowExW(w, None, "SHELLDLL_DefView", None)
+                if v:
+                    viste.append(v)
+                w = u.FindWindowExW(None, w, "WorkerW", None)
+            for v in viste:
+                u.PostMessageW(ctypes.c_void_p(v), 0x0111, AGGIORNA, 0)     # WM_COMMAND
+    except Exception:
+        pass
+    try:
+        import win32com.client
+        for fin in win32com.client.Dispatch("Shell.Application").Windows():
+            try:
+                if os.path.normcase(fin.Document.Folder.Self.Path) != c:
+                    continue
+                fin.Refresh()                 # come F5 in quella finestra
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _blocca_albero(path):
+    _blocca_albero_dentro(path)
+    avvisa_esplora(path)
+
+
+def _blocca_albero_dentro(path):
     """Cartella: blocco prima tutto il contenuto (dal fondo) e per ultima la cartella,
     finche' posso ancora leggerla. Se qualcosa va storto rimetto tutto com'era."""
     fatti = []
@@ -150,6 +227,11 @@ def _blocca_albero(path):
 
 
 def _sblocca_albero(path):
+    _sblocca_albero_dentro(path)
+    avvisa_esplora(path)
+
+
+def _sblocca_albero_dentro(path):
     """Al contrario: prima la cartella (cosi' posso vederne il contenuto), poi dentro."""
     _cambia(path, False)
     if os.path.isdir(path) and not os.path.islink(path):
@@ -157,9 +239,104 @@ def _sblocca_albero(path):
             voci = list(it)
         for e in voci:
             if e.is_dir(follow_symlinks=False):
-                _sblocca_albero(e.path)
+                _sblocca_albero_dentro(e.path)
             else:
                 _cambia(e.path, False)
+
+
+# --------------------------------------------------------------- cassaforte
+# L'elemento vero viene spostato in una cartella di Sottomano ("bloccati") e al suo posto resta un
+# collegamento con lo stesso nome e la stessa icona. Il doppio clic sul collegamento apre la finestra
+# della password (non Esplora file): con la password giusta si apre l'elemento vero.
+# Spostare sullo stesso disco e' istantaneo (cambia solo l'indirizzo, non si copia niente).
+def cassaforte(path):
+    """Cartella dove tenere gli elementi bloccati: su C: quella di Sottomano, sugli altri dischi
+    una cartella nascosta sullo stesso disco (cosi' lo spostamento resta istantaneo)."""
+    disco = os.path.splitdrive(os.path.abspath(str(path)))[0].lower()
+    if os.name != "nt" or disco == os.path.splitdrive(str(BASE))[0].lower():
+        return BASE / "bloccati"
+    c = Path(disco + "\\") / ".sottomano-bloccati"
+    if not c.exists():
+        c.mkdir()
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetFileAttributesW(str(c), 0x2)      # nascosta
+        except Exception:
+            pass
+    return c
+
+
+def _pythonw():
+    import sys
+    p = Path(sys.executable)
+    return str(p.with_name("pythonw.exe")) if p.with_name("pythonw.exe").exists() else str(p)
+
+
+def _icona_per(path, cartella):
+    """Icona del collegamento: quella delle cartelle, o quella del tipo di file (presa dal registro
+    di Windows, solo in lettura)."""
+    if cartella:
+        return os.path.expandvars(r"%SystemRoot%\System32\imageres.dll") + ",3"
+    ext = os.path.splitext(str(path))[1].lower()
+    if ext and os.name == "nt":
+        try:
+            import winreg
+            prog = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, ext)
+            for chiave_icona in (prog + r"\DefaultIcon", ext + r"\DefaultIcon"):
+                try:
+                    v = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT, chiave_icona)
+                    if v and v.strip() != "%1":
+                        return os.path.expandvars(v.strip().strip('"'))
+                except OSError:
+                    continue
+        except OSError:
+            pass
+    return os.path.expandvars(r"%SystemRoot%\System32\imageres.dll") + ",2"     # documento generico
+
+
+def _crea_collegamento(lnk, ident, icona, nome):
+    if os.name != "nt":
+        Path(lnk).write_text(f"collegamento {ident}")                      # solo per i test
+        return
+    import win32com.client
+    sc = win32com.client.Dispatch("WScript.Shell").CreateShortcut(str(lnk))
+    sc.TargetPath = _pythonw()
+    sc.Arguments = f'"{BASE / "apri_bloccato.pyw"}" {ident}'
+    sc.WorkingDirectory = str(BASE)
+    sc.IconLocation = icona
+    sc.Description = f"«{nome}» è bloccato con Sottomano: doppio clic per sbloccarlo"
+    sc.Save()
+
+
+def _trova(reg, p):
+    """Chiave del registro per: il percorso originale, il collegamento (.lnk) o l'elemento vero."""
+    k = chiave(p)
+    if k in reg:
+        v = reg[k]
+        # elemento in cassaforte: al suo posto originale ora c'e' il collegamento. Se li' c'e' un file
+        # o una cartella vera, e' un elemento NUOVO con lo stesso nome: non e' quello bloccato.
+        if not v.get("origine") or not os.path.exists(v["origine"]):
+            return k
+    elif k.endswith(".lnk") and k[:-4] in reg:
+        return k[:-4]
+    for kk, v in reg.items():
+        if chiave(v["percorso"]) == k or v.get("id") == str(p):
+            return kk
+    return None
+
+
+def voce(p, reg=None):
+    reg = reg if reg is not None else leggi()
+    k = _trova(reg, p)
+    return reg[k] if k else None
+
+
+def per_id(ident, reg=None):
+    reg = reg if reg is not None else leggi()
+    for v in reg.values():
+        if v.get("id") == ident:
+            return v
+    return None
 
 
 # -------------------------------------------------------------- operazioni
@@ -167,71 +344,158 @@ def blocca(percorsi, password):
     reg = leggi()
     sale = secrets.token_hex(16)
     impronta = _impronta(password, sale)
+    nuovi = []
     for p in percorsi:
         p = os.path.abspath(str(p))
-        v = reg.get(chiave(p))
-        if v and v["stato"] == "bloccato":
-            raise Errore(f"«{Path(p).name}» è già bloccato: per aprirlo selezionalo e premi Spazio.")
-        # se era solo "aperto" (sbloccato per ora) lo ri-blocco con la password nuova
+        k = _trova(reg, p)
+        if k and reg[k]["stato"] == "bloccato":
+            raise Errore(f"«{Path(p).name}» è già bloccato: per aprirlo fai doppio clic o premi Spazio.")
+        if k:
+            continue                     # era aperto: lo riblocco qui sotto con la password nuova
         if not supporta_permessi(p):
             raise Errore(f"«{Path(p).name}» è su un disco che non supporta i permessi (per esempio una "
                          "chiavetta FAT32/exFAT): il blocco funziona solo sui dischi NTFS.")
+        if p.lower().endswith(".lnk"):
+            raise Errore(f"«{Path(p).name}» è un collegamento: blocca l'elemento vero.")
+        if os.path.exists(p + ".lnk"):
+            raise Errore(f"Accanto a «{Path(p).name}» c'è già un collegamento con lo stesso nome.")
+        nuovi.append(p)
+    # 1) elementi gia' in cassaforte ma aperti: nuova password e di nuovo bloccati
     for p in percorsi:
-        p = os.path.abspath(str(p))
-        # prima lo segno nel registro: anche se il PC si spegnesse a meta', so cosa sbloccare
-        reg[chiave(p)] = {"percorso": p, "stato": "bloccato", "sale": sale, "impronta": impronta,
-                          "cartella": os.path.isdir(p), "dal": time.strftime("%Y-%m-%d %H:%M")}
+        k = _trova(reg, p)
+        if k:
+            v = reg[k]
+            v.update(sale=sale, impronta=impronta)
+            _blocca_albero(v["percorso"])
+            v["stato"] = "bloccato"
+            scrivi(reg)
+    # 2) elementi nuovi: in cassaforte, collegamento al loro posto, permessi tolti
+    for p in nuovi:
+        ident = secrets.token_hex(6)
+        cartella = os.path.isdir(p)
+        casa = cassaforte(p) / ident
+        vero = casa / os.path.basename(p)
+        icona = _icona_per(p, cartella)
+        # prima lo segno nel registro: anche se il PC si spegnesse a meta', so dov'e' e cosa sbloccare
+        reg[chiave(p)] = {"id": ident, "origine": p, "collegamento": p + ".lnk", "percorso": str(vero),
+                          "stato": "bloccato", "sale": sale, "impronta": impronta, "cartella": cartella,
+                          "dal": time.strftime("%Y-%m-%d %H:%M")}
         scrivi(reg)
+        casa.mkdir(parents=True, exist_ok=True)
         try:
-            _blocca_albero(p)
-        except Exception:
+            os.rename(p, vero)
+        except OSError as e:
             del reg[chiave(p)]
             scrivi(reg)
+            _rimuovi_vuota(casa)
+            raise Errore(f"Non riesco a spostare «{Path(p).name}»: è aperto in un altro programma? "
+                         f"Chiudilo e riprova. ({e.strerror or e})")
+        try:
+            _crea_collegamento(p + ".lnk", ident, icona, os.path.basename(p))
+            _blocca_albero(str(vero))
+        except Exception:
+            # qualcosa e' andato storto: rimetto tutto com'era
+            try:
+                _sblocca_albero(str(vero))
+            except Exception:
+                pass
+            os.rename(vero, p)
+            Path(p + ".lnk").unlink(missing_ok=True)
+            del reg[chiave(p)]
+            scrivi(reg)
+            _rimuovi_vuota(casa)
             raise
+        avvisa_esplora(os.path.dirname(p))
+
+
+def _rimuovi_vuota(cartella):
+    try:
+        os.rmdir(cartella)
+    except OSError:
+        pass
 
 
 def apri(p, password):
-    """Sblocco parziale: aperto finche' lo usi, poi Sottomano lo richiude da solo."""
+    """Sblocco parziale: aperto finche' lo usi, poi Sottomano lo richiude da solo.
+    Restituisce il percorso dell'elemento vero, oppure None se la password e' sbagliata."""
     reg = leggi()
-    if not password_giusta(p, password, reg):
-        return False
-    _sblocca_albero(str(p))
-    reg[chiave(p)]["stato"] = "aperto"
-    reg[chiave(p)]["aperto_alle"] = time.time()
+    k = _trova(reg, p)
+    if not k or not secrets.compare_digest(_impronta(password, reg[k]["sale"]), reg[k]["impronta"]):
+        return None
+    v = reg[k]
+    _sblocca_albero(v["percorso"])
+    v["stato"] = "aperto"
+    v["aperto_alle"] = time.time()
     scrivi(reg)
-    return True
+    return v["percorso"]
 
 
 def richiudi(p):
     reg = leggi()
-    v = reg.get(chiave(p))
-    if not v or v["stato"] == "bloccato":
+    k = _trova(reg, p)
+    if not k or reg[k]["stato"] == "bloccato":
         return
+    v = reg[k]
     _blocca_albero(v["percorso"])
     v["stato"] = "bloccato"
     scrivi(reg)
 
 
 def togli(p, password=None):
-    """Toglie la protezione per sempre. Se e' bloccato serve la password."""
+    """Sblocco completo: toglie la protezione per sempre e rimette l'elemento al suo posto
+    (al posto del collegamento). Se e' bloccato serve la password. Restituisce il percorso finale,
+    True se non c'era niente da fare, False se la password e' sbagliata."""
     reg = leggi()
-    v = reg.get(chiave(p))
-    if not v:
+    k = _trova(reg, p)
+    if not k:
         return True
+    v = reg[k]
     if v["stato"] == "bloccato":
-        if password is None or not password_giusta(p, password, reg):
+        if password is None or not secrets.compare_digest(_impronta(password, v["sale"]), v["impronta"]):
             return False
         _sblocca_albero(v["percorso"])
-    del reg[chiave(p)]
+    finale = v["percorso"]
+    if v.get("origine"):                 # era in cassaforte: torna dov'era
+        Path(v["collegamento"]).unlink(missing_ok=True)
+        origine = Path(v["origine"])
+        if not origine.parent.exists():  # la cartella di partenza non c'e' piu': lo metto sul desktop
+            origine = Path.home() / "Desktop" / origine.name
+        dest, n = origine, 1
+        while dest.exists():
+            n += 1
+            dest = origine.with_name(f"{origine.stem} ({n}){origine.suffix}")
+        if os.path.exists(v["percorso"]):
+            os.rename(v["percorso"], dest)
+            _rimuovi_vuota(Path(v["percorso"]).parent)
+        finale = str(dest)
+        avvisa_esplora(str(dest.parent))
+    del reg[k]
     scrivi(reg)
-    return True
+    return finale
 
 
 def dimentica(p):
     """Toglie dal registro un elemento che non esiste piu' (spostato o eliminato)."""
     reg = leggi()
-    if reg.pop(chiave(p), None) is not None:
+    k = _trova(reg, p)
+    if k is not None:
+        reg.pop(k)
         scrivi(reg)
+
+
+def ricrea_collegamento(p):
+    """Se hai cancellato il collegamento per sbaglio, lo rimetto al suo posto."""
+    reg = leggi()
+    k = _trova(reg, p)
+    v = reg.get(k) if k else None
+    if not v or not v.get("origine"):
+        return None
+    lnk = v["collegamento"]
+    if not os.path.exists(lnk):
+        Path(lnk).parent.mkdir(parents=True, exist_ok=True)
+        _crea_collegamento(lnk, v["id"], _icona_per(v["origine"], v["cartella"]), Path(v["origine"]).name)
+        avvisa_esplora(str(Path(lnk).parent))
+    return lnk
 
 
 def richiudi_tutti():
@@ -251,15 +515,16 @@ def richiudi_tutti():
 
 
 def aperti(reg=None):
-    """Elementi in sblocco parziale: [(percorso, da quanti secondi)]."""
+    """Elementi in sblocco parziale: [(percorso vero, da quanti secondi)]."""
     reg = reg if reg is not None else leggi()
     adesso = time.time()
     return [(v["percorso"], adesso - v.get("aperto_alle", 0)) for v in reg.values() if v["stato"] == "aperto"]
 
 
 def bloccati(reg=None):
+    """Elementi bloccati 'sul posto' (versione precedente, senza cassaforte): per il doppio clic."""
     reg = reg if reg is not None else leggi()
-    return [v["percorso"] for v in reg.values() if v["stato"] == "bloccato"]
+    return [v["percorso"] for v in reg.values() if v["stato"] == "bloccato" and not v.get("origine")]
 
 
 # ------------------------------------------------- e' ancora aperto?  (sblocco parziale)

@@ -33,6 +33,28 @@ def leggi_registro():
     return righe
 
 
+def cassaforte_vuota(altre=()):
+    """Sicurezza: nella cassaforte di Sottomano non deve essere rimasto niente di tuo."""
+    for cassa in [DEST / "bloccati"] + [Path(c) for c in altre]:
+        if cassa.exists():
+            for sotto in list(cassa.iterdir()):
+                if sotto.is_dir():
+                    try:
+                        sotto.rmdir()              # solo se vuota
+                    except OSError:
+                        pass
+            if any(cassa.iterdir()):
+                print(f"Nella cartella {cassa} ci sono ancora dei file: non la cancello.")
+                print("Spostali dove vuoi tu e rilancia la disinstallazione.")
+                return False
+            if cassa != DEST / "bloccati":
+                try:
+                    cassa.rmdir()
+                except OSError:
+                    pass
+    return True
+
+
 def sblocca_tutto():
     """Prima di disinstallare, tutto cio' che Sottomano ha bloccato con password va sbloccato:
     senza Sottomano non ci sarebbe piu' modo di aprirlo. Chiede la password elemento per elemento."""
@@ -41,17 +63,18 @@ def sblocca_tutto():
     try:
         import blocco
     except ImportError:
-        return True
+        return cassaforte_vuota()
     reg = blocco.leggi()
     if not reg:
-        return True
+        return cassaforte_vuota()
     voci = list(reg.values())
+    casseforti = {str(Path(v["percorso"]).parent.parent) for v in voci if v.get("origine")}
     print(f"\nPrima di disinstallare sblocco gli elementi protetti con password ({len(voci)}).")
     print("Per ognuno scrivi la password (non si vede mentre scrivi). Invio a vuoto = annulla.\n")
     for i, v in enumerate(voci, 1):
         p = v["percorso"]
         tipo = "Cartella" if v.get("cartella") else "File"
-        print(f"{tipo} {i} di {len(voci)}: {p}")
+        print(f"{tipo} {i} di {len(voci)}: {v.get('origine') or p}")
         if not os.path.exists(p):
             print("  Non trovato: forse è stato spostato insieme alla cartella che lo contiene.")
             if not input("  Lo salto e continuo? [s/N] ").strip().lower().startswith(("s", "y")):
@@ -62,7 +85,7 @@ def sblocca_tutto():
             continue
         if v["stato"] != "bloccato":
             blocco.togli(p)
-            print("  Era già aperto: protezione tolta.\n")
+            print("  Era già aperto: protezione tolta" + (", rimesso al suo posto" if v.get("origine") else "") + ".\n")
             continue
         while True:
             pw = getpass.getpass("Password: ")
@@ -70,10 +93,13 @@ def sblocca_tutto():
                 print("\nDisinstallazione annullata: non ho rimosso niente "
                       "(gli elementi già sbloccati restano sbloccati).")
                 return False
-            if blocco.togli(p, pw):
-                print("  Sbloccato.\n")
+            esito = blocco.togli(p, pw)
+            if esito is not False:
+                print("  Sbloccato" + (f" e rimesso al suo posto: {esito}" if isinstance(esito, str) and v.get("origine") else "") + ".\n")
                 break
             print("  Password sbagliata, riprova.")
+    if not cassaforte_vuota(casseforti):
+        return False
     print("Tutto sbloccato.\n")
     return True
 

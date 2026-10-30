@@ -87,6 +87,39 @@ def versione_precedente():
         registra(f"cartella {MODELLI_AI}")
 
 
+SCELTE = DEST / "scelte.txt"
+
+
+def scelte_precedenti():
+    try:
+        return dict(r.split("=", 1) for r in SCELTE.read_text(encoding="utf-8").split() if "=" in r)
+    except OSError:
+        return {}
+
+
+def salva_scelta(nome, si):
+    sc = scelte_precedenti()
+    sc[nome] = "si" if si else "no"
+    DEST.mkdir(parents=True, exist_ok=True)
+    SCELTE.write_text("\n".join(f"{k}={v}" for k, v in sc.items()) + "\n", encoding="utf-8")
+
+
+def scelta(nome, domanda, gia_presente=False, descrizione=""):
+    """Chiede solo la prima volta. Negli aggiornamenti tiene la scelta di prima, senza domande:
+    se l'opzione e' gia' installata resta, se avevi detto di no non la richiede."""
+    if gia_presente:
+        print(f"    {descrizione}: gia' presente, la tengo")
+        salva_scelta(nome, True)
+        return True
+    prima = scelte_precedenti().get(nome)
+    if prima is not None:
+        print(f"    {descrizione}: {'si' if prima == 'si' else 'no'} (scelto in precedenza)")
+        return prima == "si"
+    risposta = chiedi(domanda)
+    salva_scelta(nome, risposta)
+    return risposta
+
+
 def passo(t):
     print(f"\n==> {t}")
 
@@ -143,16 +176,21 @@ def main():
     passo("Librerie Python")
     prima = librerie_presenti()
     pip(*LIBRERIE)
-    if chiedi("Vuoi anche 'Rimuovi sfondo' con AI? (scarica circa 170 MB)"):
+    modello = MODELLI_AI / "isnet-general-use.onnx"
+    sfondo_gia = "rembg" in prima and modello.exists()
+    if scelta("sfondo", "Vuoi anche 'Rimuovi sfondo' con AI? (scarica circa 170 MB)", sfondo_gia,
+              "Rimuovi sfondo con AI") and not sfondo_gia:
         pip("rembg[cpu]")
-        modello = MODELLI_AI / "isnet-general-use.onnx"
         if not MODELLI_AI.exists():
             registra(f"cartella {MODELLI_AI}")
         elif not modello.exists():
             registra(f"file {modello}")
         print("    Scarico il modello AI per la rimozione sfondo (solo la prima volta)...")
         subprocess.call([str(PYTHON), "-c", "from rembg import new_session; new_session('isnet-general-use')"])
-    if chiedi("Vuoi anche i sottotitoli automatici per video e audio, con AI? (scarica circa 300 MB)"):
+    cartella_whisper = DEST / "modelli" / "whisper"
+    whisper_gia = "faster-whisper" in prima and cartella_whisper.exists() and any(cartella_whisper.rglob("model.bin"))
+    if scelta("sottotitoli", "Vuoi anche i sottotitoli automatici per video e audio, con AI? (scarica circa 300 MB)",
+              whisper_gia, "Sottotitoli automatici con AI") and not whisper_gia:
         pip("faster-whisper")
         print("    Scarico il modello AI per i sottotitoli (solo la prima volta)...")
         cartella = DEST / "modelli" / "whisper"          # dentro Sottomano: se ne va con la disinstallazione
@@ -166,7 +204,7 @@ def main():
     passo(f"Copio i file in {DEST}")
     chiudi_versione_attiva()
     DEST.mkdir(parents=True, exist_ok=True)
-    for nome in ("sottomano.pyw", "anteprima.pyw", "ritaglia.py", "strumenti.py", "blocco.py", "logo.ico", "logo.png", "disinstalla.bat", "disinstalla.py", "LICENSE", "README.md"):
+    for nome in ("sottomano.pyw", "anteprima.pyw", "ritaglia.py", "strumenti.py", "blocco.py", "apri_bloccato.pyw", "logo.ico", "logo.png", "disinstalla.bat", "disinstalla.py", "LICENSE", "README.md"):
         if (SRC / nome).exists():
             shutil.copy2(SRC / nome, DEST / nome)
 
@@ -190,16 +228,18 @@ def main():
     desktop = cartella_desktop()
     if desktop:
         sul_desktop = desktop / "Sottomano.lnk"
-        if chiedi("Vuoi l'icona di Sottomano anche sul desktop?"):
+        if scelta("icona_desktop", "Vuoi l'icona di Sottomano anche sul desktop?", sul_desktop.exists(),
+                  "Icona sul desktop"):
             collegamento(sul_desktop, "Sottomano: Ctrl+Alt+S sui file selezionati")
             registra(f"file {sul_desktop}")
-            print("    Icona sul desktop creata")
+            print("    Icona sul desktop pronta")
         elif sul_desktop.exists():
             sul_desktop.unlink()
     auto = ESEC_AUTO / "Sottomano.lnk"
-    if chiedi("Vuoi che Sottomano parta da solo quando accendi il PC?"):
+    if scelta("avvio_automatico", "Vuoi che Sottomano parta da solo quando accendi il PC?", auto.exists(),
+              "Avvio automatico"):
         collegamento(auto, "Sottomano: Ctrl+Alt+S sui file selezionati")
-        print("    Avvio automatico attivato (lo togli da Impostazioni > App > Avvio)")
+        print("    Avvio automatico attivo (lo togli da Impostazioni > App > Avvio)")
     elif auto.exists():
         auto.unlink()
         print("    Avvio automatico disattivato")
@@ -212,7 +252,8 @@ Fatto! Trovi l'icona di Sottomano vicino all'orologio (anche tra le icone nascos
   2. Premi Ctrl+Alt+S (senza niente selezionato: strumenti per la cartella)
   3. Scegli l'azione dal menu
   Spazio = anteprima al volo   ·   Ctrl+Alt+T = testo da una zona dello schermo
-Per chiuderlo: tasto destro sull'icona -> Esci.  Per riaprirlo: menu Start -> Sottomano.""")
+Per chiuderlo: tasto destro sull'icona -> Esci.  Per riaprirlo: menu Start -> Sottomano.
+(Per cambiare le scelte fatte qui: cancella %LOCALAPPDATA%\\Sottomano\\scelte.txt e rilancia installa.bat)""")
 
 
 if __name__ == "__main__":
