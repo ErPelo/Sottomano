@@ -35,14 +35,16 @@ Il menu mostra solo le voci adatte ai file selezionati.
 | **Video** (mp4, mkv, mov, avi, webm, wmv…) | Converti in MP4 / MKV / MOV / WEBM / GIF animata · **Taglia** (scegli inizio e fine guardando i fotogrammi) · Comprimi video · Estrai audio (MP3, WAV, M4A o traccia originale senza ricodifica) · Sottotitoli automatici `.srt` con AI *(opzionale)* |
 | **Audio** (mp3, wav, m4a, flac, ogg…) | Converti in MP3 / WAV / M4A / FLAC · Taglia · Trascrizione in testo con AI *(opzionale)* |
 | **Archivi** (zip, 7z, rar, tar, gz…) | **Estrai qui** (anche protetti da password) · Converti in 7z / ZIP / RAR |
-| **Cartelle** | Trova duplicati · Crea archivio ZIP / 7z |
+| **Cartelle** | Trova duplicati · Crea archivio ZIP / 7z · **Blocca con password** |
 | **Più file insieme** | **Rinomina in blocco** (nome e numero, data di scatto, sostituisci testo, con anteprima) |
-| **Qualsiasi file** | Crea archivio ZIP / 7z · Copia percorso · Calcola SHA-256 |
+| **Qualsiasi file** | **Blocca con password** · Crea archivio ZIP / 7z · Copia percorso · Calcola SHA-256 |
 | **Niente selezionato** | Crea QR code · Trova duplicati nella cartella · Testo da una zona dello schermo |
 
 - Il testo estratto viene copiato negli appunti e salvato in un `.txt` accanto all'originale. L'OCR riconosce italiano e inglese.
 - Mentre un'azione lavora, accanto all'originale compare un file `nome.estensione.in-corso` (come i download di Chrome): quando sparisce, il risultato è pronto.
 - **Editor di ritaglio**: trascini il riquadro con le maniglie e, quando lo rilasci, la vista si ingrandisce sulla zona scelta. Proporzioni fisse (1:1, 4:3, 16:9…), rotazione e dimensione finale con una barra.
+- **Blocca con password**: il file o la cartella resta dov'è, con il suo nome e la sua icona, ma non si apre, non si legge, non si sposta e non si elimina finché non scrivi la password. Per aprirlo: selezionalo e premi **Spazio** (oppure Ctrl+Alt+S → *Sblocca e apri*). Resta aperto finché non scegli *Blocca di nuovo* o fino al prossimo avvio di Sottomano, che lo richiude da solo. Sottomano non salva la password, solo un'impronta per riconoscerla. Prima di disinstallare Sottomano devi sbloccare tutto: la disinstallazione chiede la password di ogni elemento.
+  - Funziona con i permessi di Windows (NTFS), quindi sui dischi del PC ma non sulle chiavette FAT32/exFAT. È un blocco, non una cifratura: ferma chi usa il PC normalmente, ma un amministratore esperto di permessi di Windows può toglierlo. Per documenti davvero riservati usa un archivio cifrato (per esempio 7-Zip con password).
 - **Trova duplicati** cerca anche nelle sottocartelle: file identici (stesso contenuto, anche con nomi diversi) e foto simili (la stessa foto ridimensionata o ricompressa). I file scelti vanno nel **Cestino**, quindi si possono recuperare.
 
 ## Scorciatoie
@@ -55,6 +57,7 @@ Il menu mostra solo le voci adatte ai file selezionati.
 | Anteprima | **Invio** o doppio clic | apre il file nel programma predefinito |
 | Anteprima | **Spazio**, **Esc** o clic fuori | chiude |
 | Anteprima video | clic sul video · barra in basso | pausa · avanti e indietro |
+| Esplora file o desktop | **Spazio** su un elemento bloccato | chiede la password, poi mostra l'anteprima |
 | Ovunque | **Ctrl+Alt+T** | testo (e QR code) da una zona dello schermo, copiato negli appunti |
 | Editor di ritaglio | **rotellina** · **Invio** · **Esc** | zoom · salva · annulla |
 | Pagine PDF | clic · **Ctrl**/**Maiusc**+clic · trascina · **Canc** | seleziona · più pagine · sposta · elimina |
@@ -81,7 +84,7 @@ Sottomano resta attivo con un'icona vicino all'orologio (a volte tra le icone na
 
 ## Disinstallazione
 
-Doppio clic su `disinstalla.bat` (si trova anche in `%LOCALAPPDATA%\Sottomano`).
+Doppio clic su `disinstalla.bat` (si trova anche in `%LOCALAPPDATA%\Sottomano`). Se hai file o cartelle bloccati con password, prima te li fa sbloccare uno per uno: senza Sottomano non ci sarebbe più modo di aprirli.
 
 Durante l'installazione Sottomano tiene un registro (`installato.txt`) di **ciò che ha installato lui e che prima non c'era**: Python, 7-Zip, Tesseract, le librerie Python, i modelli AI, l'icona sul desktop. La disinstallazione mostra l'elenco, chiede conferma e rimuove **solo quelle cose**. Se avevi già Python, 7-Zip o una libreria prima di installare Sottomano, restano dove sono.
 

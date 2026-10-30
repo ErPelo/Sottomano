@@ -166,12 +166,12 @@ def main():
     passo(f"Copio i file in {DEST}")
     chiudi_versione_attiva()
     DEST.mkdir(parents=True, exist_ok=True)
-    for nome in ("sottomano.pyw", "anteprima.pyw", "ritaglia.py", "strumenti.py", "logo.ico", "logo.png", "disinstalla.bat", "disinstalla.py", "LICENSE", "README.md"):
+    for nome in ("sottomano.pyw", "anteprima.pyw", "ritaglia.py", "strumenti.py", "blocco.py", "logo.ico", "logo.png", "disinstalla.bat", "disinstalla.py", "LICENSE", "README.md"):
         if (SRC / nome).exists():
             shutil.copy2(SRC / nome, DEST / nome)
 
     # versione gia' compilata dei moduli: la prima apertura di ogni finestra e' piu' rapida
-    subprocess.call([str(PYTHON), "-m", "compileall", "-q", str(DEST / "ritaglia.py"), str(DEST / "strumenti.py")])
+    subprocess.call([str(PYTHON), "-m", "compileall", "-q", str(DEST / "ritaglia.py"), str(DEST / "strumenti.py"), str(DEST / "blocco.py")])
 
     passo("Lingue OCR (italiano + inglese)")
     tess = DEST / "tessdata"

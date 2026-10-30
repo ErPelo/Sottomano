@@ -33,6 +33,51 @@ def leggi_registro():
     return righe
 
 
+def sblocca_tutto():
+    """Prima di disinstallare, tutto cio' che Sottomano ha bloccato con password va sbloccato:
+    senza Sottomano non ci sarebbe piu' modo di aprirlo. Chiede la password elemento per elemento."""
+    import getpass
+    sys.path.insert(0, str(DEST))
+    try:
+        import blocco
+    except ImportError:
+        return True
+    reg = blocco.leggi()
+    if not reg:
+        return True
+    voci = list(reg.values())
+    print(f"\nPrima di disinstallare sblocco gli elementi protetti con password ({len(voci)}).")
+    print("Per ognuno scrivi la password (non si vede mentre scrivi). Invio a vuoto = annulla.\n")
+    for i, v in enumerate(voci, 1):
+        p = v["percorso"]
+        tipo = "Cartella" if v.get("cartella") else "File"
+        print(f"{tipo} {i} di {len(voci)}: {p}")
+        if not os.path.exists(p):
+            print("  Non trovato: forse è stato spostato insieme alla cartella che lo contiene.")
+            if not input("  Lo salto e continuo? [s/N] ").strip().lower().startswith(("s", "y")):
+                print("Disinstallazione annullata: rimetti l'elemento al suo posto e riprova.")
+                return False
+            blocco.dimentica(p)
+            print()
+            continue
+        if v["stato"] != "bloccato":
+            blocco.togli(p)
+            print("  Era già aperto: protezione tolta.\n")
+            continue
+        while True:
+            pw = getpass.getpass("Password: ")
+            if not pw:
+                print("\nDisinstallazione annullata: non ho rimosso niente "
+                      "(gli elementi già sbloccati restano sbloccati).")
+                return False
+            if blocco.togli(p, pw):
+                print("  Sbloccato.\n")
+                break
+            print("  Password sbagliata, riprova.")
+    print("Tutto sbloccato.\n")
+    return True
+
+
 def main():
     voci = leggi_registro()
     winget = [r.split(" ", 1)[1] for r in voci if r.startswith("winget ")]
@@ -54,9 +99,19 @@ def main():
         print(f"  - {c}")
     if not REGISTRO.exists():
         print("\n  (Nessun registro trovato: rimuovo solo Sottomano.)")
+    try:
+        sys.path.insert(0, str(DEST))
+        import blocco
+        n_bloccati = len(blocco.leggi())
+    except Exception:
+        n_bloccati = 0
+    if n_bloccati:
+        print(f"\n  Hai {n_bloccati} elementi bloccati con password: prima di disinstallare ti chiedo le password per sbloccarli.")
     print("\nTutto quello che avevi gia' prima di installare Sottomano NON viene toccato.")
     if not input("\nProcedo? [s/N] ").strip().lower().startswith(("s", "y")):
         print("Annullato: non ho rimosso niente.")
+        return 1
+    if not sblocca_tutto():
         return 1
 
     # 1. chiudo Sottomano (come cliccare Esci) e lascio che rilasci i file

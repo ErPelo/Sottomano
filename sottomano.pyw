@@ -558,9 +558,56 @@ def _fitz():
         return fitz
 
 
-def testo_pdf(f, forza_ocr=False):
+def _tipo_vero(dati):
+    """Che file e' davvero, guardando i primi byte (per i 'PDF' che PDF non sono)."""
+    t = dati[:600].lstrip().lower()
+    for inizio, nome in ((b"<?xml", "XML (per esempio una fattura elettronica)"), (b"<!doctype html", "HTML (una pagina web)"),
+                         (b"<html", "HTML (una pagina web)"), (b"pk\x03\x04", "ZIP"), (b"\xff\xd8", "JPEG (una foto)"),
+                         (b"\x89png", "PNG (un'immagine)"), (b"{\\rtf", "RTF (un documento di testo)"),
+                         (b"\xd0\xcf\x11\xe0", "Office (Word o Excel vecchio formato)"), (b"%!ps", "PostScript")):
+        if t.startswith(inizio):
+            return nome
+    return None
+
+
+def apri_pdf(f):
+    """Apre un PDF con PyMuPDF. Se non ci riesce: lo ripara con PDFium (piu' tollerante) oppure
+    spiega cosa c'e' che non va (file vuoto, file non PDF, PDF danneggiato)."""
     fitz = _fitz()
-    doc = fitz.open(f)
+    f = Path(f)
+    try:
+        return fitz.open(f)
+    except Exception as e:
+        primo = e
+    try:
+        dati = f.read_bytes()[:2048]
+    except OSError:
+        dati = b""
+    if not dati:
+        raise RuntimeError(f"«{f.name}» è vuoto (0 KB): forse il download non è finito, "
+                           "oppure il file è solo nel cloud (OneDrive) e non sul PC.")
+    if b"%PDF" not in dati[:1024]:
+        tipo = _tipo_vero(dati)
+        raise RuntimeError(f"«{f.name}» non è un vero PDF" +
+                           (f": è un file {tipo} a cui è stata data l'estensione .pdf." if tipo
+                            else ", anche se ha l'estensione .pdf.") +
+                           "\nSe ti serve il PDF, chiedi di nuovo il file a chi te l'ha mandato.")
+    try:
+        import io
+        import pypdfium2 as pdfium
+        pdf = pdfium.PdfDocument(str(f))
+        buf = io.BytesIO()
+        pdf.save(buf)
+        pdf.close()
+        log(f"--- {f.name}: PDF danneggiato, riparato con PDFium")
+        return fitz.open(stream=buf.getvalue(), filetype="pdf")
+    except Exception:
+        pass
+    raise RuntimeError(f"«{f.name}» è un PDF danneggiato e non riesco a ripararlo.") from primo
+
+
+def testo_pdf(f, forza_ocr=False):
+    doc = apri_pdf(f)
     parti = []
     for pag in doc:
         t = "" if forza_ocr else pag.get_text()
@@ -587,7 +634,7 @@ def pdf_unisci(files):
     files = sorted(files, key=lambda p: Path(p).name.lower())
     out_doc = fitz.open()
     for f in files:
-        with fitz.open(f) as d:
+        with apri_pdf(f) as d:
             out_doc.insert_pdf(d)
     out = libero(Path(files[0]).with_name("PDF_uniti.pdf"))
     with in_corso(out):
@@ -596,13 +643,12 @@ def pdf_unisci(files):
 
 
 def pdf_in_immagini(files):
-    fitz = _fitz()
     tot = 0
     for f in files:
         f = Path(f)
         cartella = libero(f.with_name(f.stem + "_pagine"))
         cartella.mkdir()
-        with fitz.open(f) as d:
+        with apri_pdf(f) as d:
             for i, pag in enumerate(d, 1):
                 pag.get_pixmap(dpi=200).save(cartella / f"pagina_{i:03d}.png")
                 tot += 1
@@ -610,12 +656,11 @@ def pdf_in_immagini(files):
 
 
 def pdf_comprimi(files):
-    fitz = _fitz()
     righe = []
     for f in files:
         f = Path(f)
         out = libero(f.with_name(f.stem + "_compresso.pdf"))
-        with in_corso(out), fitz.open(f) as d:
+        with in_corso(out), apri_pdf(f) as d:
             try:
                 d.rewrite_images(dpi_threshold=160, dpi_target=150, quality=75)
             except Exception:
@@ -1092,60 +1137,146 @@ def unisci_immagini(files):
 
 
 # ---------------------------------------------------------- archivi: estrai e crea
-def estrai_archivio(files):
+def _nome_base(f):
+    nome = f.name
+    for e in (".tar.gz", ".tar.bz2", ".tar.xz"):
+        if nome.lower().endswith(e):
+            return nome[: -len(e)]
+    return f.stem
+
+
+def _estrai(f, password=None, sciolto=False):
+    """Estrae l'archivio accanto a se'. Se e' protetto chiede la password (finche' non e' giusta).
+    sciolto=True: se dentro c'e' un solo elemento (file o cartella), lo rimette cosi' com'era.
+    Restituisce il percorso creato, oppure None se annulli."""
     sz = sette_zip()
+    out = libero(f.with_name(_nome_base(f)))
+    tmp = Path(tempfile.mkdtemp(prefix="~sottomano_", dir=f.parent))
+    try:
+        with in_corso(out):
+            sbagliata = False
+            while True:
+                try:
+                    # senza password ne passo una finta: gli archivi normali la ignorano, quelli
+                    # protetti danno subito "password sbagliata" (e allora te la chiedo)
+                    run([sz, "x", str(f), f"-o{tmp}", "-y", "-p" + (password or "nessuna-password")])
+                    break
+                except RuntimeError as err:
+                    if "password" not in str(err).lower():
+                        raise
+                    import strumenti
+                    password = strumenti.chiedi_password(
+                        "Protetto da password",
+                        f"«{f.name}» è protetto." + (" Password sbagliata, riprova:" if sbagliata or password else
+                                                    " Scrivi la password:"))
+                    if password is None:
+                        return None
+                    sbagliata = True
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    tmp.mkdir()
+            interni = os.listdir(tmp)
+            if len(interni) == 1 and interni[0].lower().endswith(".tar"):
+                t = tmp / interni[0]
+                run([sz, "x", str(t), f"-o{tmp}", "-y"])
+                t.unlink()
+                interni = os.listdir(tmp)
+            # se dentro c'e' gia' una sola cartella, niente "cartella dentro la cartella"
+            if len(interni) == 1 and ((tmp / interni[0]).is_dir() or sciolto):
+                dest = libero(f.parent / interni[0])
+                os.rename(tmp / interni[0], dest)
+                tmp.rmdir()
+            else:
+                dest = out
+                os.rename(tmp, dest)
+        return dest
+    finally:
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def estrai_archivio(files):
+    fatti = []
+    for f in files:
+        dest = _estrai(Path(f))
+        if dest is None:
+            break
+        fatti.append(dest.name)
+    return None if len(fatti) <= 1 else "Estratti in:\n" + "\n".join(fatti)
+
+
+# ------------------------------------------------- blocco con password (file e cartelle)
+def _chiedi_finche_giusta(p, titolo, verifica):
+    """Chiede la password finche' e' giusta (verifica(pw) -> bool). False se annulli."""
+    import strumenti
+    testo = f"«{Path(p).name}» è bloccato. Scrivi la password:"
+    while True:
+        pw = strumenti.chiedi_password(titolo, testo)
+        if pw is None:
+            return False
+        if verifica(pw):
+            return True
+        testo = f"Password sbagliata per «{Path(p).name}». Riprova:"
+
+
+def blocca_file(files):
+    import blocco
+    import strumenti
+    files = [str(Path(f)) for f in files]
+    nome = Path(files[0]).name if len(files) == 1 else f"{len(files)} elementi"
+    password = strumenti.chiedi_blocco(nome, cartella=any(os.path.isdir(f) for f in files))
+    if not password:
+        return None
+    try:
+        blocco.blocca(files, password)
+    except blocco.Errore as e:
+        raise RuntimeError(str(e))
+    return None                                   # nessun messaggio: lo vedi provando ad aprirlo
+
+
+def sblocca_e_apri(files, anteprima=False):
+    import blocco
+    p = files[0]
+    if blocco.stato(p) == "bloccato":
+        if not _chiedi_finche_giusta(p, "Sblocca", lambda pw: blocco.apri(p, pw)):
+            return None
+    if anteprima:
+        apri_anteprima(p)
+    else:
+        os.startfile(p)
+    return None
+
+
+def richiudi_file(files):
+    import blocco
+    for f in files:
+        blocco.richiudi(f)
+
+
+def togli_blocco(files):
+    import blocco
+    for f in files:
+        if blocco.stato(f) == "bloccato":
+            if not _chiedi_finche_giusta(f, "Togli il blocco", lambda pw, f=f: blocco.togli(f, pw)):
+                return None
+        else:
+            blocco.togli(f)
+    return None
+
+
+def sblocca(files):
+    """Rimette i file com'erano (chiede la password); l'archivio protetto va nel Cestino."""
     fatti = []
     for f in files:
         f = Path(f)
-        nome = f.name
-        for e in (".tar.gz", ".tar.bz2", ".tar.xz"):
-            if nome.lower().endswith(e):
-                nome = nome[: -len(e)]
-                break
-        else:
-            nome = f.stem
-        out = libero(f.with_name(nome))
-        tmp = Path(tempfile.mkdtemp(prefix="~sottomano_", dir=f.parent))
+        dest = _estrai(f, sciolto=True)
+        if dest is None:
+            break
         try:
-            with in_corso(out):
-                password = None
-                while True:
-                    try:
-                        # senza password ne passo una finta: gli archivi normali la ignorano, quelli
-                        # protetti danno subito "password sbagliata" (e allora te la chiedo)
-                        run([sz, "x", str(f), f"-o{tmp}", "-y", "-p" + (password or "nessuna-password")])
-                        break
-                    except RuntimeError as err:
-                        if "password" not in str(err).lower():
-                            raise
-                        import strumenti
-                        password = strumenti.chiedi_password(
-                            "Archivio protetto",
-                            f"«{f.name}» è protetto." + (" Password sbagliata, riprova:" if password else
-                                                        " Scrivi la password:"))
-                        if password is None:
-                            return None
-                        shutil.rmtree(tmp, ignore_errors=True)
-                        tmp.mkdir()
-                interni = os.listdir(tmp)
-                if len(interni) == 1 and interni[0].lower().endswith(".tar"):
-                    t = tmp / interni[0]
-                    run([sz, "x", str(t), f"-o{tmp}", "-y"])
-                    t.unlink()
-                    interni = os.listdir(tmp)
-                # se dentro c'e' gia' una sola cartella, niente "cartella dentro la cartella"
-                if len(interni) == 1 and (tmp / interni[0]).is_dir():
-                    dest = libero(f.parent / interni[0])
-                    os.rename(tmp / interni[0], dest)
-                    tmp.rmdir()
-                else:
-                    dest = out
-                    os.rename(tmp, dest)
-            fatti.append(dest.name)
-        finally:
-            if tmp.exists():
-                shutil.rmtree(tmp, ignore_errors=True)
-    return None if len(fatti) == 1 else "Estratti in:\n" + "\n".join(fatti)
+            al_cestino([f])
+        except Exception:
+            log(f"--- sblocca: cestino {f}\n{traceback.format_exc()}")
+        fatti.append(dest.name)
+    return None
 
 
 def crea_archivio(files, fmt):
@@ -1162,19 +1293,21 @@ def crea_archivio(files, fmt):
 # ----------------------------------------------------------------- PDF in piu'
 def conta_pagine(f):
     """Numero di pagine, in un attimo (PDFium). PyMuPDF lo carico solo per il lavoro vero."""
-    try:
-        import pypdfium2 as pdfium
-    except ImportError:
-        with _fitz().open(f) as d:
+    def con_pymupdf():
+        with apri_pdf(f) as d:
             if d.needs_pass:
                 raise RuntimeError("Il PDF è protetto da password: prima usa «Aggiungi o togli password».")
             return d.page_count
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        return con_pymupdf()
     try:
         pdf = pdfium.PdfDocument(str(f))
     except Exception as e:
         if "password" in str(e).lower():
             raise RuntimeError("Il PDF è protetto da password: prima usa «Aggiungi o togli password».")
-        raise
+        return con_pymupdf()          # ripara il PDF o spiega cosa c'e' che non va
     try:
         return len(pdf)
     finally:
@@ -1189,7 +1322,7 @@ def pdf_dividi(files):
     if not scelta:
         return None
     fitz = _fitz()
-    with fitz.open(f) as doc:
+    with apri_pdf(f) as doc:
 
         def salva(pagine, out):
             nuovo = fitz.open()
@@ -1234,9 +1367,8 @@ def pdf_pagine(files):
     ed = strumenti.EditorPagine(f, _fitz)
     if not ed.risultato:
         return None
-    fitz = _fitz()
     out = libero(f.with_name(f.stem + " (modificato).pdf"))
-    with in_corso(out), fitz.open(f) as doc:
+    with in_corso(out), apri_pdf(f) as doc:
         rot_orig = [doc[i].rotation for i in range(doc.page_count)]
         doc.select([i for i, _ in ed.risultato])
         for j, (i, extra) in enumerate(ed.risultato):
@@ -1253,7 +1385,7 @@ def pdf_password(files):
     nuova = None
     for f in files:
         f = Path(f)
-        doc = fitz.open(f)
+        doc = apri_pdf(f)
         try:
             if doc.needs_pass:
                 messaggio_pw = f"«{f.name}» è protetto. Scrivi la password per salvarne una copia senza password:"
@@ -1543,6 +1675,12 @@ AZIONI = {
     "zona":           zona_schermo,
     "unisci_img":     unisci_immagini,
     "estrai":         estrai_archivio,
+    "sblocca":        sblocca,
+    "blocca":         blocca_file,
+    "sblocca_apri":   sblocca_e_apri,
+    "sblocca_vedi":   lambda fs: sblocca_e_apri(fs, anteprima=True),
+    "richiudi":       richiudi_file,
+    "togli_blocco":   togli_blocco,
     "crea_zip":       lambda fs: crea_archivio(fs, "zip"),
     "crea_7z":        lambda fs: crea_archivio(fs, "7z"),
     "pdf_dividi":     pdf_dividi,
@@ -1750,8 +1888,12 @@ def _selezione_desktop_alt():
     sw = shell_app().Windows()
     loc = win32com.client.VARIANT(pythoncom.VT_I4, shellcon.CSIDL_DESKTOP)
     empty = win32com.client.VARIANT(pythoncom.VT_EMPTY, None)
-    disp = sw.FindWindowSW(loc, empty, 8, 0, 1)  # SWC_DESKTOP=8, SWFO_NEEDDISPATCH=1
-    sp = disp._oleobj_.QueryInterface(pythoncom.IID_IServiceProvider)
+    res = sw.FindWindowSW(loc, empty, 8, 0, 1)  # SWC_DESKTOP=8, SWFO_NEEDDISPATCH=1
+    # a seconda della versione di pywin32 torna l'oggetto da solo oppure (hwnd, oggetto)
+    disp = next((x for x in (res if isinstance(res, tuple) else (res,)) if not isinstance(x, int)), None)
+    if disp is None:
+        return []
+    sp = getattr(disp, "_oleobj_", disp).QueryInterface(pythoncom.IID_IServiceProvider)
     sb = sp.QueryService(sh.SID_STopLevelBrowser, sh.IID_IShellBrowser)
     view = sb.QueryActiveShellView()
     doc = win32com.client.Dispatch(view.GetItemObject(0, pythoncom.IID_IDispatch))
@@ -1814,6 +1956,20 @@ def voci_per(files):
     """Restituisce [(etichetta, azione) | (etichetta, [sottovoci]) | None per separatore]."""
     if not files:
         return []
+    try:
+        import blocco
+        reg = blocco.leggi()
+        stati = {blocco.stato(f, reg) for f in files} if reg else {None}
+    except Exception:
+        stati = {None}
+    if "bloccato" in stati:            # bloccato: si puo' solo sbloccare
+        return [("Sblocca e apri…", "sblocca_apri"), ("Togli il blocco…", "togli_blocco")]
+    if stati == {"aperto"}:
+        return [("Blocca di nuovo", "richiudi"), ("Togli il blocco", "togli_blocco"), None] + _voci_normali(files)
+    return _voci_normali(files)
+
+
+def _voci_normali(files):
     est = {Path(f).suffix.lower() for f in files}
     uno = len(files) == 1
     copia = [("Percorso", "copia_percorso")]
@@ -1823,6 +1979,7 @@ def voci_per(files):
         if uno:
             v.append(("Trova duplicati qui dentro…", "duplicati"))
         v.append(archivio)
+        v.append(("Blocca con password…", "blocca"))
         if len(files) > 1:
             v.append(("Rinomina in blocco…", "rinomina"))
         v += [None, ("Copia", copia)]
@@ -1867,6 +2024,8 @@ def voci_per(files):
     elif tutti_office:
         v.append(("Converti in PDF", "office_pdf"))
     elif tutte_arc:
+        if all("(protetto)" in Path(f).name for f in files):
+            v.append(("Togli password", "sblocca"))
         v.append(("Estrai qui", "estrai"))
         v.append(("Converti in", [("7z", "to7z"), ("ZIP", "tozip"), ("RAR", "torar")]))
     elif tutti_vid:
@@ -1895,6 +2054,7 @@ def voci_per(files):
     if len(files) > 1:
         v.append(("Rinomina in blocco…", "rinomina"))
     v.append(archivio)
+    v.append(("Blocca con password…", "blocca"))
     v.append(("Copia", copia))
     v.append(("Calcola SHA-256", "hash"))
     return v
@@ -2180,6 +2340,13 @@ class SpazioAnteprima:
         if not files:
             self._ripassa_spazio()
             return
+        try:
+            import blocco
+            if blocco.stato(files[0]) == "bloccato":
+                lavoratore.invia(["sblocca_vedi", files[0]])     # prima la password, poi l'anteprima
+                return
+        except Exception:
+            log(f"--- spazio blocco\n{traceback.format_exc()}")
         lavoratore.invia(["anteprima", files[0]])
 
 
@@ -2289,6 +2456,11 @@ def ascolta():
         pass
     win32gui.Shell_NotifyIcon(win32gui.NIM_ADD, (hwnd, 0, win32gui.NIF_ICON | win32gui.NIF_MESSAGE | win32gui.NIF_TIP,
                                                  WM_TRAY, icona, f"Sottomano - Ctrl+Alt+{TASTO}, Spazio = anteprima"))
+    try:
+        import blocco
+        blocco.richiudi_tutti()       # cio' che avevi sbloccato l'ultima volta torna bloccato
+    except Exception:
+        log(f"--- richiudi all'avvio\n{traceback.format_exc()}")
     spazio = SpazioAnteprima(hwnd, ID_SPAZIO)
     spazio.avvia()
     lavoratore = Lavoratore(hwnd)

@@ -230,9 +230,14 @@ def contenuto_archivio(path):
             sz = c
             break
     if not sz:
+        import shutil
+        sz = shutil.which("7z")
+    if not sz:
         return None, 0, 0
-    r = subprocess.run([sz, "l", "-slt", "-ba", str(path)], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", creationflags=NO)
+    r = subprocess.run([sz, "l", "-slt", "-ba", "-pnessuna-password", str(path)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", creationflags=NO, stdin=subprocess.DEVNULL)
+    if "password" in (r.stdout + r.stderr).lower() and not r.stdout.strip():
+        return "protetto", 0, 0
     voci, voce, tot = [], {}, 0
     for riga in (r.stdout + "\n").splitlines():
         if riga.strip() == "":
@@ -787,12 +792,21 @@ class Anteprima:
                     self._mostra_immagine(img)
             elif ext in ARC_EXT:
                 voci, n, tot = contenuto_archivio(self.path)
-                self._scheda_file() if voci is None else self._mostra_elenco(voci, n, tot)
+                if voci == "protetto":
+                    self._scheda_file(nota="Protetto da password · Ctrl+Alt+S → Togli password")
+                elif voci is None:
+                    self._scheda_file()
+                else:
+                    self._mostra_elenco(voci, n, tot)
             elif ext in TXT_EXT:
                 t = testo_file(self.path)
                 self._scheda_file() if t is None else self._mostra_testo(t)
             else:
                 self._scheda_file()
+        except PermissionError:
+            for w in self.corpo.winfo_children():
+                w.destroy()
+            self._scheda_file(nota="Bloccato con password · in Esplora file selezionalo e premi Spazio per sbloccarlo")
         except Exception:
             import traceback
             for w in self.corpo.winfo_children():

@@ -804,6 +804,52 @@ def chiedi_password(titolo, testo, conferma=False):
     return esito["pw"]
 
 
+def chiedi_blocco(nome, cartella=False):
+    """Password per bloccare file o cartelle. Restituisce la password o None."""
+    root, k = finestra("Blocca con password")
+    pad = int(16 * k)
+    L = int(400 * k)
+    esito = {"v": None}
+    etichetta(root, f"Blocca «{nome}»", k, FG, 11, True, wraplength=L, justify="left").pack(
+        anchor="w", padx=pad, pady=(pad, int(4 * k)))
+    cosa = "La cartella resta dov'è, con il suo nome, ma non si apre (e il contenuto non si legge)" if cartella \
+        else "Il file resta dov'è, con il suo nome, ma non si apre"
+    etichetta(root, cosa + " finché non scrivi la password. Non si può nemmeno spostare o eliminare.",
+              k, wraplength=L, justify="left").pack(anchor="w", padx=pad, pady=(0, int(12 * k)))
+    etichetta(root, "Password", k).pack(anchor="w", padx=pad, pady=(0, int(4 * k)))
+    e1 = campo(root, k, 34, show="•")
+    e1.pack(anchor="w", padx=pad, ipady=int(3 * k))
+    etichetta(root, "Ripeti la password", k).pack(anchor="w", padx=pad, pady=(int(10 * k), int(4 * k)))
+    e2 = campo(root, k, 34, show="•")
+    e2.pack(anchor="w", padx=pad, ipady=int(3 * k))
+    etichetta(root, "Per aprirlo: selezionalo e premi Spazio (oppure Ctrl+Alt+S → Sblocca e apri).\n"
+                    "Non dimenticare la password: senza, Sottomano non lo sblocca e non si può disinstallare.",
+              k, "#ffd479", wraplength=L, justify="left").pack(anchor="w", padx=pad, pady=(int(12 * k), 0))
+    avviso = etichetta(root, "", k, ERRORE)
+    avviso.pack(anchor="w", padx=pad, pady=(int(4 * k), 0))
+
+    def ok():
+        p = e1.get()
+        if len(p) < 4:
+            avviso.config(text="Usa almeno 4 caratteri.")
+            return
+        if p != e2.get():
+            avviso.config(text="Le due password non coincidono.")
+            return
+        esito["v"] = p
+        root.destroy()
+
+    giu, _ = pulsanti(root, k, "Blocca", ok, root.destroy)
+    giu.pack(fill="x", padx=pad, pady=pad)
+    root.bind("<Return>", lambda e: ok())
+    root.bind("<Escape>", lambda e: root.destroy())
+    mostra(root)
+    root.attributes("-topmost", True)
+    e1.focus_set()
+    root.mainloop()
+    return esito["v"]
+
+
 # ============================================================ unisci immagini
 def collage(immagini, modo, spazio, sfondo, lato):
     """immagini: lista di PIL gia' caricate (anche ridotte). lato: dimensione di riferimento."""

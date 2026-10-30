@@ -1,0 +1,13 @@
+
+--- pdf_password ['/tmp/claude-0/t/p/fattura.pdf']
+Traceback (most recent call last):
+  File "/home/claude/Sottomano/sottomano.pyw", line 2424, in esegui
+    msg = AZIONI[azione](files)
+          ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/claude/Sottomano/sottomano.pyw", line 1362, in pdf_password
+    doc = apri_pdf(f)
+          ^^^^^^^^^^^
+  File "/home/claude/Sottomano/sottomano.pyw", line 591, in apri_pdf
+    raise RuntimeError(f"«{f.name}» non è un vero PDF" +
+RuntimeError: «fattura.pdf» non è un vero PDF: è un file XML (per esempio una fattura elettronica) a cui è stata data l'estensione .pdf.
+Se ti serve il PDF, chiedi di nuovo il file a chi te l'ha mandato.
