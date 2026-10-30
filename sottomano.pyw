@@ -1256,7 +1256,7 @@ def togli_blocco(files):
     import blocco
     for f in files:
         if blocco.stato(f) == "bloccato":
-            if not _chiedi_finche_giusta(f, "Togli il blocco", lambda pw, f=f: blocco.togli(f, pw)):
+            if not _chiedi_finche_giusta(f, "Sblocco completo", lambda pw, f=f: blocco.togli(f, pw)):
                 return None
         else:
             blocco.togli(f)
@@ -1963,9 +1963,11 @@ def voci_per(files):
     except Exception:
         stati = {None}
     if "bloccato" in stati:            # bloccato: si puo' solo sbloccare
-        return [("Sblocca e apri…", "sblocca_apri"), ("Togli il blocco…", "togli_blocco")]
-    if stati == {"aperto"}:
-        return [("Blocca di nuovo", "richiudi"), ("Togli il blocco", "togli_blocco"), None] + _voci_normali(files)
+        return [("Sblocco completo…", "togli_blocco"), ("Sblocco parziale (apri)…", "sblocca_apri")]
+    if stati == {"aperto"}:            # sblocco parziale in corso: si richiude da solo quando lo chiudi
+        normali = [v for v in _voci_normali(files) if v is None or v[1] != "blocca"]
+        return [("Sblocco completo", "togli_blocco"), ("Blocca subito", "richiudi"),
+                ("Cambia password…", "blocca"), None] + normali
     return _voci_normali(files)
 
 
@@ -2239,32 +2241,68 @@ class Lavoratore:
 
 
 class SpazioAnteprima:
-    """Barra spaziatrice = anteprima, SOLO quando sei nell'elenco file di Esplora file o sul desktop.
+    """Tasti in Esplora file, SOLO quando sei nell'elenco dei file (o sul desktop):
+      Spazio = anteprima (su un elemento bloccato: prima la password)
+      Invio  = su un elemento bloccato chiede la password e lo apre (registrato solo se hai elementi bloccati)
+    Inoltre, se hai elementi bloccati: quando Windows mostra "Accesso negato" perche' hai fatto doppio clic
+    su uno di essi, al posto di quel messaggio compare la finestra della password.
 
-    Non usa hook della tastiera: segue quale finestra e' in primo piano (SetWinEventHook) e
-    registra il tasto Spazio con RegisterHotKey solo mentre Esplora file e' attivo.
-    Se lo Spazio serve per scrivere (rinomina, barra di ricerca, indirizzo) lo "ripassa" a Windows.
+    Non usa hook della tastiera ne' del mouse: segue quale finestra e' in primo piano (SetWinEventHook) e
+    registra i tasti con RegisterHotKey solo mentre Esplora file e' attivo.
+    Se il tasto serve per altro (rinomina, barra di ricerca, file non bloccato) lo "ripassa" a Windows.
     """
     CLASSI_ESPLORA = ("CabinetWClass", "ExploreWClass", "Progman", "WorkerW")
+    VK_SPAZIO, VK_INVIO = 0x20, 0x0D
 
-    def __init__(self, hwnd, id_tasto):
+    def __init__(self, hwnd, id_spazio, id_invio):
         import ctypes
         self.u = ctypes.windll.user32
-        self.hwnd, self.id = hwnd, id_tasto
-        self.attivo = False
+        self.hwnd = hwnd
+        self.ids = {self.VK_SPAZIO: id_spazio, self.VK_INVIO: id_invio}
+        self.attivi = set()                # tasti registrati in questo momento
         self._hook = None
         self._cb = None
+        self.lavoratore = None
+        self._reg_mtime = None
+        self._bloccati = []
+        self._ultimo_dialogo = (None, 0)
 
+    # ---------------------------------------------------------- elementi bloccati
+    def bloccati(self):
+        """Elementi bloccati (letti dal registro solo quando cambia: costa quasi niente)."""
+        try:
+            import blocco
+            m = blocco.REGISTRO.stat().st_mtime
+        except OSError:
+            m = None
+        if m != self._reg_mtime:
+            self._reg_mtime = m
+            try:
+                import blocco
+                self._bloccati = blocco.bloccati() if m else []
+            except Exception:
+                self._bloccati = []
+        return self._bloccati
+
+    # ---------------------------------------------------------- finestra in primo piano
     def avvia(self):
         import ctypes
         from ctypes import wintypes
         PROC = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
                                   wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
-        self._cb = PROC(lambda *a: self.aggiorna())  # riferimento tenuto vivo
+        self._cb = PROC(lambda hook, ev, hwnd, *a: self._primo_piano(hwnd))  # riferimento tenuto vivo
         EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT = 0x0003, 0x0000
         self._hook = self.u.SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
                                             0, self._cb, 0, 0, WINEVENT_OUTOFCONTEXT)
         self.aggiorna()
+
+    def _primo_piano(self, hwnd):
+        self.aggiorna()
+        if hwnd and self.bloccati():
+            try:
+                self._forse_accesso_negato(hwnd)
+            except Exception:
+                log(f"--- accesso negato\n{traceback.format_exc()}")
 
     def _classe(self, h):
         import ctypes
@@ -2274,33 +2312,39 @@ class SpazioAnteprima:
 
     def aggiorna(self):
         try:
-            serve = self._classe(self.u.GetForegroundWindow()) in self.CLASSI_ESPLORA
-            if serve and not self.attivo:
-                self.attivo = bool(self.u.RegisterHotKey(self.hwnd, self.id, 0x4000, 0x20))  # MOD_NOREPEAT, VK_SPACE
-            elif not serve and self.attivo:
-                self.u.UnregisterHotKey(self.hwnd, self.id)
-                self.attivo = False
+            esplora = self._classe(self.u.GetForegroundWindow()) in self.CLASSI_ESPLORA
+            vogliamo = set()
+            if esplora:
+                vogliamo.add(self.VK_SPAZIO)
+                if self.bloccati():
+                    vogliamo.add(self.VK_INVIO)
+            for vk in vogliamo - self.attivi:
+                if self.u.RegisterHotKey(self.hwnd, self.ids[vk], 0x4000, vk):   # MOD_NOREPEAT
+                    self.attivi.add(vk)
+            for vk in self.attivi - vogliamo:
+                self.u.UnregisterHotKey(self.hwnd, self.ids[vk])
+                self.attivi.discard(vk)
         except Exception:
-            log(f"--- spazio aggiorna\n{traceback.format_exc()}")
+            log(f"--- tasti aggiorna\n{traceback.format_exc()}")
 
     def spegni(self):
-        if self.attivo:
-            self.u.UnregisterHotKey(self.hwnd, self.id)
-            self.attivo = False
+        for vk in list(self.attivi):
+            self.u.UnregisterHotKey(self.hwnd, self.ids[vk])
+        self.attivi.clear()
         if self._hook:
             self.u.UnhookWinEvent(self._hook)
             self._hook = None
 
     TIMER_RIATTIVA = 77
 
-    def _ripassa_spazio(self):
-        """Lo Spazio non era per noi: lo rimando alla finestra come se nulla fosse.
+    def _ripassa(self, vk):
+        """Il tasto non era per noi: lo rimando alla finestra come se nulla fosse.
         Torno in ascolto solo dopo un attimo (timer): altrimenti intercetterei di nuovo
-        proprio lo spazio che ho appena rimandato, all'infinito."""
-        self.u.UnregisterHotKey(self.hwnd, self.id)
-        self.attivo = False
-        self.u.keybd_event(0x20, 0, 0, 0)
-        self.u.keybd_event(0x20, 0, 2, 0)
+        proprio il tasto che ho appena rimandato, all'infinito."""
+        self.u.UnregisterHotKey(self.hwnd, self.ids[vk])
+        self.attivi.discard(vk)
+        self.u.keybd_event(vk, 0, 0, 0)
+        self.u.keybd_event(vk, 0, 2, 0)
         self.u.SetTimer(self.hwnd, self.TIMER_RIATTIVA, 80, None)
 
     def riattiva(self):
@@ -2331,23 +2375,158 @@ class SpazioAnteprima:
             return self._classe(self.u.GetParent(gi.hwndFocus)) == "SHELLDLL_DefView"
         return False
 
-    def premuto(self, lavoratore):
+    # ---------------------------------------------------------- tasti premuti
+    def premuto(self, vk):
+        lavoratore = self.lavoratore
         fg = self.u.GetForegroundWindow()
         if not self._focus_su_elenco_file(fg):
-            self._ripassa_spazio()
+            self._ripassa(vk)
             return
         files = file_selezionati(fg)
         if not files:
-            self._ripassa_spazio()
+            self._ripassa(vk)
             return
+        bloccato = False
         try:
             import blocco
-            if blocco.stato(files[0]) == "bloccato":
-                lavoratore.invia(["sblocca_vedi", files[0]])     # prima la password, poi l'anteprima
-                return
+            bloccato = blocco.stato(files[0]) == "bloccato"
         except Exception:
-            log(f"--- spazio blocco\n{traceback.format_exc()}")
-        lavoratore.invia(["anteprima", files[0]])
+            log(f"--- tasto blocco\n{traceback.format_exc()}")
+        if vk == self.VK_INVIO:
+            if bloccato:
+                lavoratore.invia(["sblocca_apri", files[0]])    # password, poi si apre nel suo programma
+            else:
+                self._ripassa(vk)                               # Invio normale di Esplora file
+            return
+        lavoratore.invia(["sblocca_vedi" if bloccato else "anteprima", files[0]])
+
+    # ---------------------------------------------------------- doppio clic
+    def _forse_accesso_negato(self, hwnd):
+        """Doppio clic su un elemento bloccato: Windows (o il programma) mostra un messaggio di errore
+        che contiene il nome dell'elemento. Lo riconosco, lo chiudo e chiedo la password al suo posto."""
+        import time
+        import win32gui
+        if self._classe(hwnd) != "#32770":                 # solo finestre di messaggio/errore
+            return
+        titolo = win32gui.GetWindowText(hwnd)
+        if titolo.startswith("Sottomano"):                 # i messaggi di Sottomano stesso
+            return
+        testo = _testo_finestra(hwnd).lower()
+        trovato = None
+        for p in self.bloccati():
+            if p.lower() in testo:
+                trovato = p
+                break
+        if trovato is None:
+            for p in self.bloccati():
+                nome = os.path.basename(p).lower()
+                if len(nome) >= 3 and nome in testo:
+                    trovato = p
+                    break
+        if trovato is None:
+            return
+        ultimo, quando = self._ultimo_dialogo
+        if ultimo == trovato and time.monotonic() - quando < 3:
+            return
+        self._ultimo_dialogo = (trovato, time.monotonic())
+        win32gui.PostMessage(hwnd, 0x0010, 0, 0)           # WM_CLOSE: via il messaggio di errore
+        self.lavoratore.invia(["sblocca_apri", trovato])
+
+
+def _testo_finestra(hwnd):
+    """Titolo e testi di una finestra di messaggio (anche quelle moderne, lette con UI Automation)."""
+    import win32gui
+    parti = [win32gui.GetWindowText(hwnd)]
+
+    def figlio(h, _):
+        t = win32gui.GetWindowText(h)
+        if t:
+            parti.append(t)
+        return True
+    try:
+        win32gui.EnumChildWindows(hwnd, figlio, None)
+    except Exception:
+        pass
+    try:
+        U, a = uia()
+        tutti = a.ElementFromHandle(hwnd).FindAll(4, a.CreateTrueCondition())    # TreeScope_Descendants
+        for i in range(min(tutti.Length, 80)):
+            n = tutti.GetElement(i).CurrentName
+            if n:
+                parti.append(n)
+    except Exception:
+        pass
+    return "\n".join(parti)
+
+
+class Guardiano:
+    """Sblocco parziale: ogni 2 secondi controlla se gli elementi sbloccati sono ancora aperti
+    (finestra di Esplora file, programma che li usa, titolo di una finestra). Quando li hai chiusi
+    li blocca di nuovo. Se non c'e' niente di sbloccato, legge solo la data del registro."""
+    TIMER = 80
+    MARGINE = 20          # secondi dopo lo sblocco in cui non richiudo (i programmi lenti devono partire)
+
+    def __init__(self, hwnd):
+        import ctypes
+        self.u = ctypes.windll.user32
+        self.hwnd = hwnd
+        self.liberi = {}
+
+    def avvia(self):
+        self.u.SetTimer(self.hwnd, self.TIMER, 2000, None)
+
+    def controlla(self):
+        import blocco
+        if not blocco.REGISTRO.exists():
+            return
+        aperti = blocco.aperti()
+        if not aperti:
+            self.liberi.clear()
+            return
+        titoli = _titoli_finestre()
+        cartelle = _cartelle_esplora()
+        for p, da in aperti:
+            if not os.path.exists(p) or da < self.MARGINE:
+                self.liberi.pop(p, None)
+                continue
+            if blocco.in_uso(p, titoli, cartelle, blocco.file_occupati):
+                self.liberi[p] = 0
+                continue
+            self.liberi[p] = self.liberi.get(p, 0) + 1
+            if self.liberi[p] >= 2:                     # chiuso da almeno 2 controlli: lo blocco
+                try:
+                    blocco.richiudi(p)
+                except Exception:
+                    log(f"--- richiudi {p}\n{traceback.format_exc()}")
+                self.liberi.pop(p, None)
+
+
+def _titoli_finestre():
+    import win32gui
+    titoli = []
+
+    def una(h, _):
+        if win32gui.IsWindowVisible(h):
+            t = win32gui.GetWindowText(h)
+            if t:
+                titoli.append(t.lower())
+        return True
+    win32gui.EnumWindows(una, None)
+    return titoli
+
+
+def _cartelle_esplora():
+    out = []
+    try:
+        for w in shell_app().Windows():
+            try:
+                out.append(w.Document.Folder.Self.Path)
+            except Exception:
+                pass
+    except Exception:
+        global _SHELL
+        _SHELL = None
+    return out
 
 
 def ascolta():
@@ -2357,13 +2536,14 @@ def ascolta():
     import win32con
     import win32api
 
-    spazio = None  # assegnato piu' sotto, usato dalle funzioni interne
+    spazio = None  # assegnati piu' sotto, usati dalle funzioni interne
+    guardiano = None
     if win32gui.FindWindow(CLASSE_SERVIZIO, None):
         messaggio("Sottomano è già attivo: trovi l'icona vicino all'orologio.")
         return
 
     WM_TRAY = win32con.WM_USER + 20
-    ID_HOTKEY, ID_SPAZIO, ID_ZONA, ID_ESCI, ID_TESTO = 1, 2, 3, 1000, 1001
+    ID_HOTKEY, ID_SPAZIO, ID_ZONA, ID_INVIO, ID_ESCI, ID_TESTO = 1, 2, 3, 4, 1000, 1001
     lavoratore = None
 
     def menu_icona(hwnd):
@@ -2391,7 +2571,9 @@ def ascolta():
     def on_hotkey(hwnd, msg, wparam, lparam):
         try:
             if wparam == ID_SPAZIO:
-                spazio.premuto(lavoratore)
+                spazio.premuto(SpazioAnteprima.VK_SPAZIO)
+            elif wparam == ID_INVIO:
+                spazio.premuto(SpazioAnteprima.VK_INVIO)
             elif wparam == ID_ZONA:
                 lavoratore.invia(["zona"])
             else:
@@ -2428,6 +2610,11 @@ def ascolta():
             alleggerisci()
         elif wparam == TIMER_PRONTO:
             lavoratore.prepara()
+        elif wparam == Guardiano.TIMER and guardiano is not None:
+            try:
+                guardiano.controlla()
+            except Exception:
+                log(f"--- guardiano\n{traceback.format_exc()}")
         return 0
 
     _tema_scuro_menu()
@@ -2461,9 +2648,12 @@ def ascolta():
         blocco.richiudi_tutti()       # cio' che avevi sbloccato l'ultima volta torna bloccato
     except Exception:
         log(f"--- richiudi all'avvio\n{traceback.format_exc()}")
-    spazio = SpazioAnteprima(hwnd, ID_SPAZIO)
-    spazio.avvia()
     lavoratore = Lavoratore(hwnd)
+    spazio = SpazioAnteprima(hwnd, ID_SPAZIO, ID_INVIO)
+    spazio.lavoratore = lavoratore
+    spazio.avvia()
+    guardiano = Guardiano(hwnd)
+    guardiano.avvia()
     lavoratore.prepara_tra(2500)   # il primo processo pronto parte dopo qualche secondo (non rallenta l'avvio)
     win32gui.PumpMessages()
 

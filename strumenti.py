@@ -822,7 +822,7 @@ def chiedi_blocco(nome, cartella=False):
     etichetta(root, "Ripeti la password", k).pack(anchor="w", padx=pad, pady=(int(10 * k), int(4 * k)))
     e2 = campo(root, k, 34, show="•")
     e2.pack(anchor="w", padx=pad, ipady=int(3 * k))
-    etichetta(root, "Per aprirlo: selezionalo e premi Spazio (oppure Ctrl+Alt+S → Sblocca e apri).\n"
+    etichetta(root, "Per aprirlo: doppio clic, Invio o Spazio, poi la password. Quando lo chiudi si riblocca da solo.\n"
                     "Non dimenticare la password: senza, Sottomano non lo sblocca e non si può disinstallare.",
               k, "#ffd479", wraplength=L, justify="left").pack(anchor="w", padx=pad, pady=(int(12 * k), 0))
     avviso = etichetta(root, "", k, ERRORE)

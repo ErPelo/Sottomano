@@ -43,7 +43,10 @@ Il menu mostra solo le voci adatte ai file selezionati.
 - Il testo estratto viene copiato negli appunti e salvato in un `.txt` accanto all'originale. L'OCR riconosce italiano e inglese.
 - Mentre un'azione lavora, accanto all'originale compare un file `nome.estensione.in-corso` (come i download di Chrome): quando sparisce, il risultato è pronto.
 - **Editor di ritaglio**: trascini il riquadro con le maniglie e, quando lo rilasci, la vista si ingrandisce sulla zona scelta. Proporzioni fisse (1:1, 4:3, 16:9…), rotazione e dimensione finale con una barra.
-- **Blocca con password**: il file o la cartella resta dov'è, con il suo nome e la sua icona, ma non si apre, non si legge, non si sposta e non si elimina finché non scrivi la password. Per aprirlo: selezionalo e premi **Spazio** (oppure Ctrl+Alt+S → *Sblocca e apri*). Resta aperto finché non scegli *Blocca di nuovo* o fino al prossimo avvio di Sottomano, che lo richiude da solo. Sottomano non salva la password, solo un'impronta per riconoscerla. Prima di disinstallare Sottomano devi sbloccare tutto: la disinstallazione chiede la password di ogni elemento.
+- **Blocca con password**: il file o la cartella resta dov'è, con il suo nome e la sua icona, ma non si apre, non si legge, non si sposta e non si elimina senza password.
+  - **Sblocco parziale**: doppio clic, **Invio** o **Spazio** sull'elemento bloccato → compare la finestra della password. Resta aperto finché lo usi; quando chiudi la cartella o il programma, Sottomano lo riblocca da solo.
+  - **Sblocco completo**: Ctrl+Alt+S → *Sblocco completo* toglie la protezione per sempre.
+  - Sottomano non salva la password, solo un'impronta per riconoscerla. Prima di disinstallare Sottomano devi sbloccare tutto: la disinstallazione chiede la password di ogni elemento.
   - Funziona con i permessi di Windows (NTFS), quindi sui dischi del PC ma non sulle chiavette FAT32/exFAT. È un blocco, non una cifratura: ferma chi usa il PC normalmente, ma un amministratore esperto di permessi di Windows può toglierlo. Per documenti davvero riservati usa un archivio cifrato (per esempio 7-Zip con password).
 - **Trova duplicati** cerca anche nelle sottocartelle: file identici (stesso contenuto, anche con nomi diversi) e foto simili (la stessa foto ridimensionata o ricompressa). I file scelti vanno nel **Cestino**, quindi si possono recuperare.
 
@@ -57,7 +60,7 @@ Il menu mostra solo le voci adatte ai file selezionati.
 | Anteprima | **Invio** o doppio clic | apre il file nel programma predefinito |
 | Anteprima | **Spazio**, **Esc** o clic fuori | chiude |
 | Anteprima video | clic sul video · barra in basso | pausa · avanti e indietro |
-| Esplora file o desktop | **Spazio** su un elemento bloccato | chiede la password, poi mostra l'anteprima |
+| Esplora file o desktop | doppio clic, **Invio** o **Spazio** su un elemento bloccato | chiede la password, poi lo apre (con Spazio: l'anteprima) |
 | Ovunque | **Ctrl+Alt+T** | testo (e QR code) da una zona dello schermo, copiato negli appunti |
 | Editor di ritaglio | **rotellina** · **Invio** · **Esc** | zoom · salva · annulla |
 | Pagine PDF | clic · **Ctrl**/**Maiusc**+clic · trascina · **Canc** | seleziona · più pagine · sposta · elimina |

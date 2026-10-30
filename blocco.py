@@ -64,7 +64,7 @@ def _impronta(password, sale):
 
 
 def stato(p, reg=None):
-    """'bloccato', 'aperto' (sbloccato per ora, si richiude) oppure None."""
+    """'bloccato', 'aperto' (sblocco parziale: si richiude da solo quando lo chiudi) oppure None."""
     v = (reg if reg is not None else leggi()).get(chiave(p))
     return v["stato"] if v else None
 
@@ -169,8 +169,10 @@ def blocca(percorsi, password):
     impronta = _impronta(password, sale)
     for p in percorsi:
         p = os.path.abspath(str(p))
-        if chiave(p) in reg:
-            raise Errore(f"«{Path(p).name}» è già protetto da Sottomano.")
+        v = reg.get(chiave(p))
+        if v and v["stato"] == "bloccato":
+            raise Errore(f"«{Path(p).name}» è già bloccato: per aprirlo selezionalo e premi Spazio.")
+        # se era solo "aperto" (sbloccato per ora) lo ri-blocco con la password nuova
         if not supporta_permessi(p):
             raise Errore(f"«{Path(p).name}» è su un disco che non supporta i permessi (per esempio una "
                          "chiavetta FAT32/exFAT): il blocco funziona solo sui dischi NTFS.")
@@ -189,12 +191,13 @@ def blocca(percorsi, password):
 
 
 def apri(p, password):
-    """Sblocca per ora (si richiude con 'Blocca di nuovo' o al prossimo avvio di Sottomano)."""
+    """Sblocco parziale: aperto finche' lo usi, poi Sottomano lo richiude da solo."""
     reg = leggi()
     if not password_giusta(p, password, reg):
         return False
     _sblocca_albero(str(p))
     reg[chiave(p)]["stato"] = "aperto"
+    reg[chiave(p)]["aperto_alle"] = time.time()
     scrivi(reg)
     return True
 
@@ -245,3 +248,85 @@ def richiudi_tutti():
                 pass
     if cambiato:
         scrivi(reg)
+
+
+def aperti(reg=None):
+    """Elementi in sblocco parziale: [(percorso, da quanti secondi)]."""
+    reg = reg if reg is not None else leggi()
+    adesso = time.time()
+    return [(v["percorso"], adesso - v.get("aperto_alle", 0)) for v in reg.values() if v["stato"] == "aperto"]
+
+
+def bloccati(reg=None):
+    reg = reg if reg is not None else leggi()
+    return [v["percorso"] for v in reg.values() if v["stato"] == "bloccato"]
+
+
+# ------------------------------------------------- e' ancora aperto?  (sblocco parziale)
+def _nomi_da_cercare(nome):
+    """Nome con e senza estensione (Esplora file e molti programmi nascondono l'estensione)."""
+    nomi = {nome.lower()}
+    radice_nome = os.path.splitext(nome)[0].lower()
+    if len(radice_nome) >= 5:
+        nomi.add(radice_nome)
+    return nomi
+
+
+def _nel_titolo(nome, titolo):
+    """Il nome compare nel titolo come parola intera ("note.txt" si', "notepad" no)."""
+    import re
+    return re.search(r"(?<![\w.])" + re.escape(nome) + r"(?![\w])", titolo) is not None
+
+
+def in_uso(percorso, titoli, cartelle_aperte, file_occupati):
+    """Il file o la cartella si sta ancora usando?
+    titoli: titoli delle finestre aperte (minuscolo); cartelle_aperte: cartelle mostrate in Esplora file;
+    file_occupati(lista) -> True se un programma tiene aperto almeno uno di quei file."""
+    p = chiave(percorso)
+    if os.path.isdir(percorso):
+        for c in cartelle_aperte:
+            c = chiave(c)
+            if c == p or c.startswith(p.rstrip("\\/") + os.sep):
+                return True
+        file_dentro = []
+        for radice, _, nomi in os.walk(percorso):
+            for n in nomi:
+                file_dentro.append(os.path.join(radice, n))
+                if len(file_dentro) >= 400:
+                    break
+            if len(file_dentro) >= 400:
+                break
+        cerca = set()
+        for f in file_dentro:
+            cerca |= {n for n in _nomi_da_cercare(os.path.basename(f)) if len(n) >= 5}
+    else:
+        file_dentro = [percorso]
+        cerca = _nomi_da_cercare(os.path.basename(percorso))
+    # programmi che mostrano il nome del file nel titolo (Blocco note, Foto, l'anteprima di Sottomano...)
+    if any(n in t and _nel_titolo(n, t) for t in titoli for n in cerca):
+        return True
+    # programmi che tengono il file aperto (Word, Excel, lettori PDF, VLC...)
+    try:
+        return bool(file_dentro) and file_occupati(file_dentro)
+    except Exception:
+        return False
+
+
+def file_occupati(percorsi):
+    """Windows Restart Manager: c'e' un programma che sta usando questi file?"""
+    import ctypes
+    from ctypes import wintypes
+    rm = ctypes.WinDLL("rstrtmgr")
+    sessione = wintypes.DWORD()
+    chiave_s = ctypes.create_unicode_buffer(64)
+    if rm.RmStartSession(ctypes.byref(sessione), 0, chiave_s) != 0:
+        return False
+    try:
+        arr = (wintypes.LPCWSTR * len(percorsi))(*[str(x) for x in percorsi])
+        if rm.RmRegisterResources(sessione, len(percorsi), arr, 0, None, 0, None) != 0:
+            return False
+        servono, n, motivi = wintypes.UINT(0), wintypes.UINT(0), wintypes.DWORD(0)
+        esito = rm.RmGetList(sessione, ctypes.byref(servono), ctypes.byref(n), None, ctypes.byref(motivi))
+        return esito in (0, 234) and servono.value > 0          # 234 = ci sono programmi (ERROR_MORE_DATA)
+    finally:
+        rm.RmEndSession(sessione)
