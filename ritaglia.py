@@ -43,6 +43,21 @@ def applica_logo(root):
             pass
 
 
+def radice():
+    """Finestra principale di Tk. Se il processo e' stato pre-avviato da Sottomano ne esiste gia'
+    una pronta (nascosta, vuota): la riuso e risparmio il tempo di avvio di Tk."""
+    r = getattr(tk, "_default_root", None)
+    if r is not None:
+        try:
+            if r.winfo_exists() and not r.winfo_children() and r.state() == "withdrawn":
+                return r
+        except tk.TclError:
+            pass
+    r = tk.Tk()
+    r.withdraw()          # chi la usa la mostra quando e' pronta (niente finestra vuota che lampeggia)
+    return r
+
+
 _CACHE = {}
 
 
@@ -137,7 +152,7 @@ class Editor:
         self.animando = False
         self._vista = None
 
-        self.root = tk.Tk()
+        self.root = radice()
         self.root.withdraw()
         self.root.title(f"Ritaglia e ridimensiona - {nome}")
         self.root.configure(bg=BG)
@@ -523,7 +538,7 @@ def scegli_dimensione(n_file, esempio=None):
     """Finestra a pulsanti per piu' immagini. Restituisce (lato_massimo|None, qualita) o None."""
     nitido()
     scelta = {"lato": 1920, "q": 80, "ok": False}
-    root = tk.Tk()
+    root = radice()
     root.withdraw()
     root.title("Ridimensiona e comprimi")
     root.configure(bg=BG)

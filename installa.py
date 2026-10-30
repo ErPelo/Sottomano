@@ -24,8 +24,8 @@ SRC = Path(__file__).resolve().parent
 DEST = Path(os.environ["LOCALAPPDATA"]) / "Sottomano"
 PYTHON = Path(sys.executable)
 PYTHONW = PYTHON.with_name("pythonw.exe")
-LIBRERIE = ["pillow", "pillow-heif", "pymupdf", "pytesseract", "pywin32", "comtypes", "ffpyplayer",
-            "imageio-ffmpeg"]
+LIBRERIE = ["pillow", "pillow-heif", "pymupdf", "pypdfium2", "pytesseract", "pywin32", "comtypes", "ffpyplayer",
+            "imageio-ffmpeg", "qrcode", "zxing-cpp"]
 APPDATA = Path(os.environ["APPDATA"])
 MENU_START = APPDATA / r"Microsoft\Windows\Start Menu\Programs"
 ESEC_AUTO = MENU_START / "Startup"
@@ -78,7 +78,7 @@ def versione_precedente():
             if chiedi(f"{nome} l'ha installato Sottomano?"):
                 registra(f"winget {id_}")
     presenti = librerie_presenti()
-    nostre = [l for l in LIBRERIE + ["rembg"] if l in presenti and f"pip {l}" not in righe]
+    nostre = [l for l in LIBRERIE + ["rembg", "faster-whisper"] if l in presenti and f"pip {l}" not in righe]
     if nostre and chiedi("Queste librerie Python le hai installate solo per Sottomano?\n      "
                          + ", ".join(nostre) + "\n   "):
         for l in nostre:
@@ -152,15 +152,26 @@ def main():
             registra(f"file {modello}")
         print("    Scarico il modello AI per la rimozione sfondo (solo la prima volta)...")
         subprocess.call([str(PYTHON), "-c", "from rembg import new_session; new_session('isnet-general-use')"])
+    if chiedi("Vuoi anche i sottotitoli automatici per video e audio, con AI? (scarica circa 300 MB)"):
+        pip("faster-whisper")
+        print("    Scarico il modello AI per i sottotitoli (solo la prima volta)...")
+        cartella = DEST / "modelli" / "whisper"          # dentro Sottomano: se ne va con la disinstallazione
+        cartella.mkdir(parents=True, exist_ok=True)
+        subprocess.call([str(PYTHON), "-c", "import sys; from faster_whisper import WhisperModel; "
+                         "WhisperModel('base', device='cpu', compute_type='int8', download_root=sys.argv[1])",
+                         str(cartella)])
     for nuova in sorted(librerie_presenti() - prima):
         registra(f"pip {nuova}")   # solo quelle che prima non c'erano
 
     passo(f"Copio i file in {DEST}")
     chiudi_versione_attiva()
     DEST.mkdir(parents=True, exist_ok=True)
-    for nome in ("sottomano.pyw", "anteprima.pyw", "ritaglia.py", "logo.ico", "logo.png", "disinstalla.bat", "disinstalla.py", "LICENSE", "README.md"):
+    for nome in ("sottomano.pyw", "anteprima.pyw", "ritaglia.py", "strumenti.py", "logo.ico", "logo.png", "disinstalla.bat", "disinstalla.py", "LICENSE", "README.md"):
         if (SRC / nome).exists():
             shutil.copy2(SRC / nome, DEST / nome)
+
+    # versione gia' compilata dei moduli: la prima apertura di ogni finestra e' piu' rapida
+    subprocess.call([str(PYTHON), "-m", "compileall", "-q", str(DEST / "ritaglia.py"), str(DEST / "strumenti.py")])
 
     passo("Lingue OCR (italiano + inglese)")
     tess = DEST / "tessdata"
@@ -198,8 +209,9 @@ def main():
     print("""
 Fatto! Trovi l'icona di Sottomano vicino all'orologio (anche tra le icone nascoste ^).
   1. Seleziona uno o piu' file in Esplora file o sul desktop
-  2. Premi Ctrl+Alt+S
+  2. Premi Ctrl+Alt+S (senza niente selezionato: strumenti per la cartella)
   3. Scegli l'azione dal menu
+  Spazio = anteprima al volo   ·   Ctrl+Alt+T = testo da una zona dello schermo
 Per chiuderlo: tasto destro sull'icona -> Esci.  Per riaprirlo: menu Start -> Sottomano.""")
 
 

@@ -15,6 +15,7 @@ This program is distributed WITHOUT ANY WARRANTY; see the LICENSE file for detai
 """
 import os
 import sys
+import json
 import shutil
 import hashlib
 import tempfile
@@ -29,7 +30,7 @@ for _flusso in ("stdout", "stderr"):
     if getattr(sys, _flusso) is None:
         setattr(sys, _flusso, open(os.devnull, "w", encoding="utf-8"))
 
-VERSIONE = "0.1"
+VERSIONE = "0.2"
 BASE = Path(__file__).resolve().parent
 TESSDATA = BASE / "tessdata"
 LOG = BASE / "errori.log"
@@ -38,6 +39,9 @@ IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".
 ARC_EXT = {".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz"}
 VID_EXT = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".wmv", ".m4v", ".mpg", ".mpeg", ".flv", ".3gp", ".ts"}
 AUD_EXT = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}
+TXT_EXT = {".txt", ".md", ".log", ".csv", ".json", ".xml", ".yml", ".yaml", ".ini", ".cfg", ".py", ".js",
+           ".html", ".htm", ".css", ".bat", ".ps1", ".sql", ".srt", ".vtt"}
+OFFICE_EXT = {".doc", ".docx", ".rtf", ".odt", ".xls", ".xlsx", ".ods", ".ppt", ".pptx", ".odp"}
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -55,9 +59,21 @@ def _logo(root):
             pass
 
 
+def nitido():
+    """Finestre e menu disegnati alla risoluzione vera dello schermo (nitidi anche al 125/150%)."""
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def _tk():
-    import tkinter as tk
-    root = tk.Tk()
+    from ritaglia import radice
+    root = radice()
     _logo(root)
     root.withdraw()
     root.attributes("-topmost", True)
@@ -74,23 +90,32 @@ def errore(msg, title="Sottomano - errore"):
     r = _tk(); messagebox.showerror(title, msg, parent=r); r.destroy()
 
 
-def mostra_testo(titolo, testo):
+def mostra_testo(titolo, testo, nota="Testo copiato negli appunti (e salvato in un .txt accanto al file).",
+                 link=None):
     """Finestra con il testo estratto, già copiato negli appunti."""
     import tkinter as tk
     from tkinter import scrolledtext
-    root = tk.Tk()
+    from ritaglia import radice
+    root = radice()
     _logo(root)
     root.title(titolo)
-    root.geometry("720x520")
+    k = max(root.winfo_fpixels("1i") / 96.0, 1.0)
+    w, h = int(720 * k), int(520 * k)
+    root.geometry(f"{w}x{h}+{(root.winfo_screenwidth() - w) // 2}+{max((root.winfo_screenheight() - h) // 3, 0)}")
     root.attributes("-topmost", True)
     root.after(800, lambda: root.attributes("-topmost", False))
     root.clipboard_clear(); root.clipboard_append(testo); root.update()
-    tk.Label(root, text="Testo copiato negli appunti (e salvato in un .txt accanto al file).",
-             anchor="w").pack(fill="x", padx=8, pady=(8, 2))
+    tk.Label(root, text=nota, anchor="w").pack(fill="x", padx=8, pady=(8, 2))
     box = scrolledtext.ScrolledText(root, wrap="word", font=("Segoe UI", 10))
     box.pack(fill="both", expand=True, padx=8, pady=8)
     box.insert("1.0", testo)
-    tk.Button(root, text="Chiudi", command=root.destroy, width=12).pack(pady=(0, 8))
+    giu = tk.Frame(root)
+    giu.pack(pady=(0, 8))
+    if link:
+        tk.Button(giu, text="Apri il link", command=lambda: os.startfile(link), width=14).pack(side="left", padx=4)
+    tk.Button(giu, text="Chiudi", command=root.destroy, width=12).pack(side="left", padx=4)
+    root.deiconify()
+    root.after(50, lambda: (root.focus_force(), root.lift()))
     root.mainloop()
 
 
@@ -224,7 +249,9 @@ def ocr_immagine(im):
 
 
 def run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW)
+    # stdin chiuso: se un archivio chiede la password, 7-Zip si ferma subito invece di aspettare per sempre
+    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=NO_WINDOW, stdin=subprocess.DEVNULL,
+                       encoding="utf-8", errors="replace")
     if r.returncode not in (0, 1):  # 1 = avvisi non bloccanti per 7z/rar
         raise RuntimeError((r.stderr or r.stdout or "comando fallito").strip()[-800:])
 
@@ -746,6 +773,734 @@ def hash_file(files):
     mostra_testo("SHA-256", testo)
 
 
+# ---------------------------------------------------------- appunti di Windows
+def copia_testo_appunti(testo):
+    import win32clipboard as cb
+    cb.OpenClipboard()
+    try:
+        cb.EmptyClipboard()
+        cb.SetClipboardText(testo, cb.CF_UNICODETEXT)
+    finally:
+        cb.CloseClipboard()
+
+
+def copia_immagine_appunti(im):
+    """Immagine negli appunti: formato classico (DIB) per tutti i programmi + PNG per chi
+    lo capisce (cosi' la trasparenza non si perde)."""
+    import io
+    import win32clipboard as cb
+    bmp = io.BytesIO()
+    rgb(im).save(bmp, "BMP")
+    png = io.BytesIO()
+    im.save(png, "PNG")
+    cb.OpenClipboard()
+    try:
+        cb.EmptyClipboard()
+        cb.SetClipboardData(cb.CF_DIB, bmp.getvalue()[14:])
+        cb.SetClipboardData(cb.RegisterClipboardFormat("PNG"), png.getvalue())
+    finally:
+        cb.CloseClipboard()
+
+
+def copia_percorso(files):
+    copia_testo_appunti("\r\n".join(str(f) for f in files))
+
+
+def copia_immagine(files):
+    copia_immagine_appunti(apri_immagine(files[0]))
+
+
+def copia_contenuto(files):
+    dati = Path(files[0]).read_bytes()
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            copia_testo_appunti(dati.decode(enc))
+            return None
+        except UnicodeDecodeError:
+            continue
+
+
+# ---------------------------------------------------------- rinomina in blocco
+def rinomina_file(files):
+    import strumenti
+    coppie = strumenti.rinomina(files)
+    if not coppie:
+        return None
+    selezione = {Path(a).resolve() for a, _ in coppie}
+    usati, piano = set(), []
+    for a, b in coppie:
+        if a == b:
+            usati.add(str(b).lower())
+            continue
+        n, base = 1, b
+        # niente sovrascritture: ne' file esterni alla selezione, ne' due file con lo stesso nome
+        while str(b).lower() in usati or (b.exists() and b.resolve() not in selezione):
+            n += 1
+            b = base.with_name(f"{base.stem} ({n}){base.suffix}")
+        usati.add(str(b).lower())
+        piano.append((a, b))
+    # due passaggi (prima nomi temporanei): cosi' anche scambi come 1->2 e 2->1 funzionano
+    temporanei, errori = [], []
+    for i, (a, b) in enumerate(piano):
+        t = a.with_name(f"~sottomano{os.getpid()}_{i}{a.suffix}")
+        try:
+            a.rename(t)
+            temporanei.append((t, a, b))
+        except OSError as e:
+            errori.append(f"{a.name}: {e.strerror or e}")
+    fatti = 0
+    for t, a, b in temporanei:
+        try:
+            t.rename(b)
+            fatti += 1
+        except OSError as e:
+            t.rename(a)
+            errori.append(f"{a.name}: {e.strerror or e}")
+    msg = f"Rinominati {fatti} file."
+    if errori:
+        msg += "\n\nNon rinominati (aperti in un altro programma?):\n" + "\n".join(errori[:10])
+    return msg
+
+
+# ---------------------------------------------------------------- ruota foto
+# Rotazione EXIF: quale valore di "Orientamento" ottieni ruotando la foto come si vede
+ROTAZIONI = {
+    "dx":  {1: 6, 2: 7, 3: 8, 4: 5, 5: 2, 6: 3, 7: 4, 8: 1},
+    "sx":  {1: 8, 2: 5, 3: 6, 4: 7, 5: 4, 6: 1, 7: 2, 8: 3},
+    "180": {1: 3, 2: 4, 3: 1, 4: 2, 5: 7, 6: 8, 7: 5, 8: 6},
+}
+
+
+def _jpeg_ruota_senza_perdita(dati, verso):
+    """Ruota un JPEG cambiando solo il campo 'Orientamento' dei metadati: nessuna ricompressione,
+    istantaneo, qualita' identica (come fanno Windows e i telefoni). None se non si puo'."""
+    from PIL import Image
+    dati = bytearray(dati)
+    if dati[:2] != b"\xff\xd8":
+        return None
+    i, n, app0 = 2, len(dati), None
+    while i + 4 <= n:
+        if dati[i] != 0xFF:
+            return None
+        m = dati[i + 1]
+        if m == 0xFF:
+            i += 1
+            continue
+        if m in (0xDA, 0xD9):
+            break
+        lung = int.from_bytes(dati[i + 2:i + 4], "big")
+        if m == 0xE0 and app0 is None:
+            app0 = i + 2 + lung
+        if m == 0xE1 and dati[i + 4:i + 10] == b"Exif\0\0":
+            t = i + 10
+            e = {b"II": "little", b"MM": "big"}.get(bytes(dati[t:t + 2]))
+            if not e:
+                return None
+            ifd = t + int.from_bytes(dati[t + 4:t + 8], e)
+            for j in range(int.from_bytes(dati[ifd:ifd + 2], e)):
+                voce = ifd + 2 + 12 * j
+                if int.from_bytes(dati[voce:voce + 2], e) == 0x0112:
+                    if int.from_bytes(dati[voce + 2:voce + 4], e) != 3:    # deve essere uno SHORT
+                        return None
+                    vecchio = int.from_bytes(dati[voce + 8:voce + 10], e)
+                    dati[voce + 8:voce + 10] = ROTAZIONI[verso].get(vecchio, ROTAZIONI[verso][1]).to_bytes(2, e)
+                    return bytes(dati)
+            return None                       # EXIF senza orientamento: lo lascio a Pillow
+        i += 2 + lung
+    # nessun EXIF: ne aggiungo uno minimo con il solo orientamento
+    ex = Image.Exif()
+    ex[0x0112] = ROTAZIONI[verso][1]
+    corpo = ex.tobytes()
+    seg = b"\xff\xe1" + (len(corpo) + 2).to_bytes(2, "big") + corpo
+    pos = app0 or 2
+    return bytes(dati[:pos]) + seg + bytes(dati[pos:])
+
+
+def ruota_immagini(files, verso):
+    from PIL import Image, ImageOps, ImageSequence
+    op = {"dx": Image.Transpose.ROTATE_270, "sx": Image.Transpose.ROTATE_90,
+          "180": Image.Transpose.ROTATE_180}[verso]
+    errori = []
+    for f in files:
+        f = Path(f)
+        st = f.stat()
+        tmp = f.with_name(f".{f.name}.sottomano-tmp")
+        try:
+            ext = f.suffix.lower()
+            nuovi = _jpeg_ruota_senza_perdita(f.read_bytes(), verso) if ext in (".jpg", ".jpeg") else None
+            if nuovi is not None:
+                tmp.write_bytes(nuovi)
+            elif ext in (".heic", ".heif"):
+                im = apri_immagine(f).transpose(op)
+                im.save(tmp, format="HEIF", quality=92)
+            else:
+                im = Image.open(f)
+                fmt = im.format
+                if getattr(im, "n_frames", 1) > 1 and fmt in ("GIF", "WEBP"):
+                    fotogrammi = [fr.copy().transpose(op) for fr in ImageSequence.Iterator(im)]
+                    fotogrammi[0].save(tmp, format=fmt, save_all=True, append_images=fotogrammi[1:],
+                                       loop=im.info.get("loop", 0), duration=im.info.get("duration", 100))
+                else:
+                    opz = {}
+                    if im.info.get("icc_profile"):
+                        opz["icc_profile"] = im.info["icc_profile"]
+                    if fmt == "JPEG":                        # stessa compressione dell'originale
+                        from PIL import JpegImagePlugin
+                        opz.update(qtables=im.quantization, subsampling=max(JpegImagePlugin.get_sampling(im), 0))
+                        exif = im.getexif()
+                        exif[0x0112] = 1
+                        opz["exif"] = exif.tobytes()
+                    elif fmt == "WEBP":
+                        lossless = f.read_bytes()[12:16] == b"VP8L"
+                        opz.update(lossless=lossless, quality=100 if lossless else 92)
+                    elif fmt == "PNG":
+                        opz["optimize"] = False
+                    raddrizzata = ImageOps.exif_transpose(im).transpose(op)
+                    raddrizzata.save(tmp, format=fmt, **opz)
+            os.replace(tmp, f)
+            os.utime(f, (st.st_atime, st.st_mtime))      # la data del file non cambia
+        except Exception as e:
+            tmp.unlink(missing_ok=True)
+            errori.append(f"{f.name}: {e}")
+            log(f"--- ruota {f}\n{traceback.format_exc()}")
+    if errori:
+        raise RuntimeError("Non sono riuscito a ruotare:\n" + "\n".join(errori[:10]))
+    return None                                     # nessun messaggio: la miniatura si aggiorna da sola
+
+
+# ------------------------------------------------------------------ QR code
+def _testo_per_qr(files):
+    """Testo iniziale del QR: link di un collegamento .url, contenuto di un .txt, o gli appunti."""
+    if files:
+        f = Path(files[0])
+        try:
+            if f.suffix.lower() == ".url":
+                for riga in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                    if riga.upper().startswith("URL="):
+                        return riga[4:].strip()
+            if f.suffix.lower() in TXT_EXT and f.stat().st_size < 3000:
+                return f.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            pass
+    try:
+        import tkinter as tk
+        t = tk._default_root.clipboard_get() if tk._default_root else ""
+        if t and len(t) < 1500:
+            return t.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def crea_qr(files):
+    import strumenti
+    from ritaglia import radice
+    destinazione = Path(files[0]) if files else Path.home() / "Desktop"
+    if not destinazione.is_dir():
+        destinazione = destinazione.parent
+    radice()                                          # serve per leggere gli appunti
+    iniziale = _testo_per_qr(files)
+
+    def salva(im, testo):
+        import re
+        nome = re.sub(r"^https?://(www\.)?", "", testo.splitlines()[0])
+        nome = re.sub(r'[<>:"/\\|?*\s]+', "_", nome).strip("_.")[:40] or "testo"
+        out = libero(destinazione / f"QR {nome}.png")
+        im.save(out)
+        return f"Salvato: {out.name}"
+
+    def copia(im, testo):
+        copia_immagine_appunti(im)
+        return "Copiato: incollalo dove vuoi (Ctrl+V)"
+    strumenti.crea_qr(iniziale, salva, copia)
+
+
+def _leggi_codici(im):
+    import zxingcpp
+    risultati = zxingcpp.read_barcodes(rgb(im))
+    if not risultati and min(im.size) < 400:      # codici piccoli: riprovo ingrandendo
+        from PIL import Image
+        risultati = zxingcpp.read_barcodes(rgb(im).resize((im.width * 3, im.height * 3), Image.LANCZOS))
+    return [r.text for r in risultati if r.text]
+
+
+def leggi_qr(files):
+    trovati = []
+    for f in files:
+        for t in _leggi_codici(apri_immagine(f)):
+            trovati.append(t if len(files) == 1 else f"{Path(f).name}:\n{t}")
+    if not trovati:
+        raise RuntimeError("Nessun QR code (o codice a barre) trovato nell'immagine.")
+    testo = "\n\n".join(trovati)
+    link = trovati[0] if len(trovati) == 1 and trovati[0].startswith(("http://", "https://")) else None
+    mostra_testo("QR code", testo, nota="Contenuto del codice (già copiato negli appunti).", link=link)
+
+
+# ------------------------------------------------- testo da una zona dello schermo
+def zona_schermo(files=None):
+    """Ctrl+Alt+T: scegli una zona dello schermo, Sottomano legge il testo (OCR) e i QR code."""
+    import strumenti
+    im = strumenti.scegli_zona()
+    if im is None:
+        return None
+    parti = []
+    try:
+        codici = _leggi_codici(im)
+    except Exception:
+        codici = []
+    for c in codici:
+        parti.append(c)
+    testo = ""
+    try:
+        testo = ocr_immagine(im.resize((im.width * 2, im.height * 2)) if im.height < 300 else im).strip()
+    except Exception:
+        if not codici:
+            raise
+    if testo and not codici:
+        parti.append(testo)
+    elif testo and codici:
+        parti.append("Testo nella zona:\n" + testo)
+    if not parti:
+        raise RuntimeError("Non ho trovato testo né QR code nella zona scelta.")
+    link = codici[0] if len(codici) == 1 and codici[0].startswith(("http://", "https://")) else None
+    mostra_testo("Testo dallo schermo", "\n\n".join(parti), nota="Già copiato negli appunti: incollalo con Ctrl+V.",
+                 link=link)
+
+
+# ------------------------------------------------------------ unisci immagini
+def unisci_immagini(files):
+    import strumenti
+    files = sorted(files, key=lambda p: strumenti._naturale(Path(p).name))
+    scelta = strumenti.scegli_collage(files)
+    if not scelta:
+        return None
+    modo, spazio, sfondo = scelta
+    lato = 1600 if modo != "griglia" else 1000
+    imgs = []
+    for f in files:                       # gia' ridotte mentre le apro: poca RAM anche con 30 foto
+        im = apri_immagine(f, (lato, lato))
+        im.thumbnail((lato, lato))
+        imgs.append(im)
+    sp = spazio * max(lato // 100, 4)
+    im = strumenti.collage(imgs, modo, sp, sfondo, lato)
+    del imgs
+    tutte_jpg = all(Path(f).suffix.lower() in (".jpg", ".jpeg") for f in files)
+    out = libero(Path(files[0]).with_name(f"Immagini unite.{'jpg' if tutte_jpg else 'png'}"))
+    with in_corso(out):
+        _salva_immagine(im, out, 92)
+    return f"Creata: {out.name}  ({im.width} × {im.height} px)"
+
+
+# ---------------------------------------------------------- archivi: estrai e crea
+def estrai_archivio(files):
+    sz = sette_zip()
+    fatti = []
+    for f in files:
+        f = Path(f)
+        nome = f.name
+        for e in (".tar.gz", ".tar.bz2", ".tar.xz"):
+            if nome.lower().endswith(e):
+                nome = nome[: -len(e)]
+                break
+        else:
+            nome = f.stem
+        out = libero(f.with_name(nome))
+        tmp = Path(tempfile.mkdtemp(prefix="~sottomano_", dir=f.parent))
+        try:
+            with in_corso(out):
+                password = None
+                while True:
+                    try:
+                        # senza password ne passo una finta: gli archivi normali la ignorano, quelli
+                        # protetti danno subito "password sbagliata" (e allora te la chiedo)
+                        run([sz, "x", str(f), f"-o{tmp}", "-y", "-p" + (password or "nessuna-password")])
+                        break
+                    except RuntimeError as err:
+                        if "password" not in str(err).lower():
+                            raise
+                        import strumenti
+                        password = strumenti.chiedi_password(
+                            "Archivio protetto",
+                            f"«{f.name}» è protetto." + (" Password sbagliata, riprova:" if password else
+                                                        " Scrivi la password:"))
+                        if password is None:
+                            return None
+                        shutil.rmtree(tmp, ignore_errors=True)
+                        tmp.mkdir()
+                interni = os.listdir(tmp)
+                if len(interni) == 1 and interni[0].lower().endswith(".tar"):
+                    t = tmp / interni[0]
+                    run([sz, "x", str(t), f"-o{tmp}", "-y"])
+                    t.unlink()
+                    interni = os.listdir(tmp)
+                # se dentro c'e' gia' una sola cartella, niente "cartella dentro la cartella"
+                if len(interni) == 1 and (tmp / interni[0]).is_dir():
+                    dest = libero(f.parent / interni[0])
+                    os.rename(tmp / interni[0], dest)
+                    tmp.rmdir()
+                else:
+                    dest = out
+                    os.rename(tmp, dest)
+            fatti.append(dest.name)
+        finally:
+            if tmp.exists():
+                shutil.rmtree(tmp, ignore_errors=True)
+    return None if len(fatti) == 1 else "Estratti in:\n" + "\n".join(fatti)
+
+
+def crea_archivio(files, fmt):
+    sz = sette_zip()
+    files = [Path(f) for f in files]
+    base = files[0].stem if len(files) == 1 and files[0].is_file() else files[0].name if len(files) == 1 \
+        else files[0].parent.name or "Archivio"
+    out = libero(files[0].with_name(f"{base}.{fmt}"))
+    with in_corso(out):
+        run([sz, "a", f"-t{fmt}", "-mx=7" if fmt == "zip" else "-mx=9", str(out), *[str(f) for f in files]])
+    return None
+
+
+# ----------------------------------------------------------------- PDF in piu'
+def conta_pagine(f):
+    """Numero di pagine, in un attimo (PDFium). PyMuPDF lo carico solo per il lavoro vero."""
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        with _fitz().open(f) as d:
+            if d.needs_pass:
+                raise RuntimeError("Il PDF è protetto da password: prima usa «Aggiungi o togli password».")
+            return d.page_count
+    try:
+        pdf = pdfium.PdfDocument(str(f))
+    except Exception as e:
+        if "password" in str(e).lower():
+            raise RuntimeError("Il PDF è protetto da password: prima usa «Aggiungi o togli password».")
+        raise
+    try:
+        return len(pdf)
+    finally:
+        pdf.close()
+
+
+def pdf_dividi(files):
+    import strumenti
+    f = Path(files[0])
+    n = conta_pagine(f)
+    scelta = strumenti.scegli_divisione(n, f.name)
+    if not scelta:
+        return None
+    fitz = _fitz()
+    with fitz.open(f) as doc:
+
+        def salva(pagine, out):
+            nuovo = fitz.open()
+            for a, b in _blocchi(pagine):
+                nuovo.insert_pdf(doc, from_page=a, to_page=b)
+            nuovo.save(out, garbage=3, deflate=True)
+            nuovo.close()
+
+        if scelta[0] == "pagine":
+            etichetta = "".join(c for c in scelta[2] if c.isdigit() or c in "-,").strip(",")[:30]
+            out = libero(f.with_name(f"{f.stem} (pagine {etichetta}).pdf"))
+            with in_corso(out):
+                salva(scelta[1], out)
+            return f"Creato: {out.name}  ({len(scelta[1])} pagine)"
+        cartella = libero(f.with_name(f"{f.stem} - diviso"))
+        cartella.mkdir()
+        passo = 1 if scelta[0] == "singole" else scelta[1]
+        cifre = len(str(n))
+        for i, inizio in enumerate(range(0, n, passo), 1):
+            fine = min(inizio + passo, n) - 1
+            nome = f"pagina {inizio + 1:0{cifre}d}.pdf" if passo == 1 else \
+                f"parte {i:02d} (pagine {inizio + 1}-{fine + 1}).pdf"
+            salva(list(range(inizio, fine + 1)), cartella / nome)
+        return f"Creati {-(-n // passo)} PDF nella cartella:\n{cartella.name}"
+
+
+def _blocchi(pagine):
+    """[0,1,2,5,6] -> [(0,2),(5,6)]: inserire blocchi di pagine e' molto piu' veloce che una alla volta."""
+    out = []
+    for p in pagine:
+        if out and p == out[-1][1] + 1:
+            out[-1][1] = p
+        else:
+            out.append([p, p])
+    return [tuple(x) for x in out]
+
+
+def pdf_pagine(files):
+    import strumenti
+    f = Path(files[0])
+    conta_pagine(f)                        # PDF protetto: lo dico subito, con un messaggio chiaro
+    ed = strumenti.EditorPagine(f, _fitz)
+    if not ed.risultato:
+        return None
+    fitz = _fitz()
+    out = libero(f.with_name(f.stem + " (modificato).pdf"))
+    with in_corso(out), fitz.open(f) as doc:
+        rot_orig = [doc[i].rotation for i in range(doc.page_count)]
+        doc.select([i for i, _ in ed.risultato])
+        for j, (i, extra) in enumerate(ed.risultato):
+            if extra:
+                doc[j].set_rotation((rot_orig[i] + extra) % 360)
+        doc.save(out, garbage=3, deflate=True)
+    return f"Salvato: {out.name}  ({len(ed.risultato)} pagine)"
+
+
+def pdf_password(files):
+    import strumenti
+    fitz = _fitz()
+    righe = []
+    nuova = None
+    for f in files:
+        f = Path(f)
+        doc = fitz.open(f)
+        try:
+            if doc.needs_pass:
+                messaggio_pw = f"«{f.name}» è protetto. Scrivi la password per salvarne una copia senza password:"
+                while True:
+                    pw = strumenti.chiedi_password("Togli password", messaggio_pw)
+                    if pw is None:
+                        return "\n".join(righe) or None
+                    if doc.authenticate(pw):
+                        break
+                    messaggio_pw = f"Password sbagliata per «{f.name}». Riprova:"
+                out = libero(f.with_name(f.stem + " (senza password).pdf"))
+                with in_corso(out):
+                    doc.save(out, encryption=fitz.PDF_ENCRYPT_NONE, garbage=3, deflate=True)
+                righe.append(f"Sbloccato: {out.name}")
+            else:
+                if nuova is None:
+                    nuova = strumenti.chiedi_password(
+                        "Proteggi con password",
+                        "Scegli la password per aprire il PDF" + (" (vale per tutti i file selezionati)." if len(files) > 1 else "."),
+                        conferma=True)
+                    if nuova is None:
+                        return "\n".join(righe) or None
+                out = libero(f.with_name(f.stem + " (protetto).pdf"))
+                with in_corso(out):
+                    doc.save(out, encryption=fitz.PDF_ENCRYPT_AES_256, owner_pw=nuova, user_pw=nuova,
+                             garbage=3, deflate=True)
+                righe.append(f"Protetto: {out.name}")
+        finally:
+            doc.close()
+    if nuova:
+        righe.append("\nRicordati la password: senza, il PDF non si apre più.")
+    return "\n".join(righe)
+
+
+# --------------------------------------------------------- Word, Excel... in PDF
+def office_pdf(files):
+    """Usa Microsoft Office se c'e' (stesso risultato di 'Salva come PDF'), altrimenti LibreOffice."""
+    righe = []
+    for f in files:
+        f = Path(f)
+        out = libero(f.with_suffix(".pdf"))
+        with in_corso(out):
+            try:
+                _office_com(f, out)
+            except _NoOffice:
+                _libreoffice(f, out)
+        righe.append(out.name)
+    return "Creati:\n" + "\n".join(righe)
+
+
+class _NoOffice(Exception):
+    pass
+
+
+def _office_com(f, out):
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        raise _NoOffice()
+    ext = f.suffix.lower()
+    prog = "Word.Application" if ext in (".doc", ".docx", ".rtf", ".odt") else \
+        "Excel.Application" if ext in (".xls", ".xlsx", ".ods") else "PowerPoint.Application"
+    pythoncom.CoInitialize()
+    try:
+        app = win32com.client.DispatchEx(prog)          # istanza separata: non tocca i documenti che hai aperti
+    except Exception:
+        raise _NoOffice()
+    try:
+        if prog.startswith("Word"):
+            app.Visible = False
+            app.DisplayAlerts = 0
+            doc = app.Documents.Open(str(f), ConfirmConversions=False, ReadOnly=True, AddToRecentFiles=False)
+            try:
+                doc.ExportAsFixedFormat(str(out), 17)    # wdExportFormatPDF
+            finally:
+                doc.Close(False)
+        elif prog.startswith("Excel"):
+            app.Visible = False
+            app.DisplayAlerts = False
+            wb = app.Workbooks.Open(str(f), ReadOnly=True, AddToMru=False)
+            try:
+                wb.ExportAsFixedFormat(0, str(out))       # xlTypePDF
+            finally:
+                wb.Close(False)
+        else:
+            pres = app.Presentations.Open(str(f), ReadOnly=True, Untitled=False, WithWindow=False)
+            try:
+                pres.SaveAs(str(out), 32)                 # ppSaveAsPDF
+            finally:
+                pres.Close()
+    finally:
+        try:
+            app.Quit()
+        except Exception:
+            pass
+
+
+def _libreoffice(f, out):
+    exe = trova_exe(r"%ProgramFiles%\LibreOffice\program\soffice.exe",
+                    r"%ProgramFiles(x86)%\LibreOffice\program\soffice.exe", "soffice")
+    if not exe:
+        raise RuntimeError("Per convertire in PDF serve Microsoft Office oppure LibreOffice (gratis).")
+    with tempfile.TemporaryDirectory() as tmp:
+        run([exe, "--headless", "--norestore", "--convert-to", "pdf", "--outdir", tmp, str(f)])
+        prodotto = Path(tmp) / (f.stem + ".pdf")
+        if not prodotto.exists():
+            raise RuntimeError("LibreOffice non è riuscito a convertire il file.")
+        shutil.move(str(prodotto), str(out))
+
+
+# -------------------------------------------------------------- video: taglia
+def durata_media(f):
+    """Durata in secondi letta dall'intestazione (ffmpeg -i), senza decodificare nulla."""
+    import re
+    r = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", str(f)], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", creationflags=NO_WINDOW, stdin=subprocess.DEVNULL)
+    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr)
+    if not m:
+        raise RuntimeError("Non riesco a leggere la durata del file.")
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)), r.stderr
+
+
+def fotogramma(f, t, w, h):
+    """Un solo fotogramma all'istante t, gia' rimpicciolito (ricerca veloce sui fotogrammi chiave)."""
+    import io
+    from PIL import Image
+    r = subprocess.run([ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(f),
+                        "-frames:v", "1", "-vf", f"scale='min({w},iw)':'min({h},ih)':force_original_aspect_ratio=decrease",
+                        "-f", "image2pipe", "-c:v", "bmp", "-"], capture_output=True, creationflags=NO_WINDOW,
+                       stdin=subprocess.DEVNULL)
+    if not r.stdout:
+        return None
+    return Image.open(io.BytesIO(r.stdout)).convert("RGB")
+
+
+def taglia(files):
+    import strumenti
+    f = Path(files[0])
+    durata, _ = durata_media(f)
+    video = f.suffix.lower() in VID_EXT
+    ed = strumenti.EditorTaglio(f.name, durata, (lambda t, w, h: fotogramma(f, t, w, h)) if video else None)
+    if not ed.risultato:
+        return None
+    a, b, preciso = ed.risultato
+    tempo = ["-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-i", str(f)]
+    if not preciso:
+        out = libero(f.with_name(f"{f.stem} (tagliato){f.suffix}"))
+        with in_corso(out):
+            _ffmpeg([*tempo, "-map", "0", "-c", "copy", "-avoid_negative_ts", "make_zero", str(out)])
+    elif video:
+        out = libero(f.with_name(f"{f.stem} (tagliato).mp4"))
+        with in_corso(out):
+            _ffmpeg([*tempo, "-map", "0:v:0", "-map", "0:a?", *H264, *AAC, "-movflags", "+faststart", str(out)])
+    else:
+        ext = f.suffix.lower().lstrip(".")
+        fmt = ext if ext in AUDIO_OPZ else "mp3"
+        out = libero(f.with_name(f"{f.stem} (tagliato).{fmt}"))
+        with in_corso(out):
+            _ffmpeg([*tempo, "-vn", "-map", "0:a:0", *AUDIO_OPZ[fmt], str(out)])
+    return f"Salvato: {out.name}  ({strumenti._mmss(b - a)})"
+
+
+ESTENSIONE_CODEC = {"aac": "m4a", "alac": "m4a", "mp3": "mp3", "opus": "opus", "vorbis": "ogg", "flac": "flac",
+                    "ac3": "ac3", "eac3": "eac3", "pcm_s16le": "wav", "pcm_s24le": "wav"}
+
+
+def audio_originale(files):
+    """Estrae la traccia audio cosi' com'e' (nessuna ricodifica: istantaneo, qualita' identica)."""
+    import re
+    fatti = []
+    for f in files:
+        f = Path(f)
+        _, info = durata_media(f)
+        m = re.search(r"Audio:\s*([\w]+)", info)
+        if not m:
+            raise RuntimeError(f"«{f.name}» non ha una traccia audio.")
+        ext = ESTENSIONE_CODEC.get(m.group(1), "mka")
+        out = libero(f.with_suffix("." + ext))
+        with in_corso(out):
+            _ffmpeg(["-i", str(f), "-vn", "-map", "0:a:0", "-c:a", "copy", str(out)])
+        fatti.append((f, out))
+    return "Audio estratto senza ricodifica:\n" + _riepilogo(fatti)
+
+
+# -------------------------------------------------- sottotitoli automatici (AI)
+MODELLO_WHISPER = "base"     # leggero: ~145 MB, va bene anche sui PC lenti
+
+
+def _srt_tempo(t):
+    ms = int(round(t * 1000))
+    h, ms = divmod(ms, 3600000)
+    m, ms = divmod(ms, 60000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def sottotitoli(files):
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise RuntimeError("Funzione opzionale non installata.\nRilancia installa.bat e rispondi S alla domanda "
+                           "sui sottotitoli automatici.")
+    files = [Path(f) for f in files]
+    uscite = [libero(f.with_suffix(".srt" if f.suffix.lower() in VID_EXT else ".txt")) for f in files]
+    righe = []
+    with in_corso(*uscite):
+        modello = WhisperModel(MODELLO_WHISPER, device="cpu", compute_type="int8",
+                               download_root=str(BASE / "modelli" / "whisper"),
+                               cpu_threads=max((os.cpu_count() or 2) - 1, 1))
+        for f, out in zip(files, uscite):
+            segmenti, info = modello.transcribe(str(f), vad_filter=True)
+            with open(out, "w", encoding="utf-8") as fh:
+                for i, s in enumerate(segmenti, 1):
+                    if out.suffix == ".srt":
+                        fh.write(f"{i}\n{_srt_tempo(s.start)} --> {_srt_tempo(s.end)}\n{s.text.strip()}\n\n")
+                    else:
+                        fh.write(s.text.strip() + "\n")
+            righe.append(f"{out.name}  (lingua: {info.language})")
+    nota = "\n\nI lettori video (VLC, Film e TV...) caricano da soli il file .srt con lo stesso nome del video." \
+        if any(o.suffix == ".srt" for o in uscite) else ""
+    return "Creati:\n" + "\n".join(righe) + nota
+
+
+# ------------------------------------------------------------------ duplicati
+def al_cestino(percorsi):
+    """Sposta nel Cestino (recuperabili), non cancella definitivamente."""
+    from win32com.shell import shell, shellcon
+    flag = shellcon.FOF_ALLOWUNDO | shellcon.FOF_NOCONFIRMATION | shellcon.FOF_SILENT | shellcon.FOF_NOERRORUI
+    try:
+        shell.SHFileOperation((0, shellcon.FO_DELETE, "\0".join(str(p) for p in percorsi), None, flag, None, None))
+    except Exception:
+        for p in percorsi:                    # ripiego: uno alla volta
+            try:
+                shell.SHFileOperation((0, shellcon.FO_DELETE, str(p), None, flag, None, None))
+            except Exception:
+                log(f"--- cestino {p}\n{traceback.format_exc()}")
+
+
+def trova_duplicati(files):
+    import strumenti
+    cartella = Path(files[0]) if files else None
+    if cartella is None or not cartella.is_dir():
+        cartella = cartella.parent if cartella else Path.home()
+    strumenti.duplicati(str(cartella), al_cestino)
+
+
 AZIONI = {
     "png":            lambda fs: converti_immagine(fs, "png"),
     "jpg":            lambda fs: converti_immagine(fs, "jpg"),
@@ -775,7 +1530,31 @@ AZIONI = {
     "a_m4a":          lambda fs: converti_audio(fs, "m4a"),
     "a_flac":         lambda fs: converti_audio(fs, "flac"),
     "hash":           hash_file,
+    # nuove
+    "rinomina":       rinomina_file,
+    "ruota_dx":       lambda fs: ruota_immagini(fs, "dx"),
+    "ruota_sx":       lambda fs: ruota_immagini(fs, "sx"),
+    "ruota_180":      lambda fs: ruota_immagini(fs, "180"),
+    "copia_percorso": copia_percorso,
+    "copia_immagine": copia_immagine,
+    "copia_testo":    copia_contenuto,
+    "qr_crea":        crea_qr,
+    "qr_leggi":       leggi_qr,
+    "zona":           zona_schermo,
+    "unisci_img":     unisci_immagini,
+    "estrai":         estrai_archivio,
+    "crea_zip":       lambda fs: crea_archivio(fs, "zip"),
+    "crea_7z":        lambda fs: crea_archivio(fs, "7z"),
+    "pdf_dividi":     pdf_dividi,
+    "pdf_pagine":     pdf_pagine,
+    "pdf_password":   pdf_password,
+    "office_pdf":     office_pdf,
+    "taglia":         taglia,
+    "a_orig":         audio_originale,
+    "sottotitoli":    sottotitoli,
+    "duplicati":      trova_duplicati,
 }
+SENZA_FILE = {"zona", "qr_crea", "duplicati"}      # azioni che funzionano anche senza file selezionati
 
 
 # ===================================================== menu rapido (Ctrl+Alt+S)
@@ -807,15 +1586,56 @@ def file_selezionati(hwnd=None):
     return []
 
 
-def _selezione_esplora(hwnd, cartelle_out):
-    import win32com.client
-    candidati = []
-    for w in win32com.client.Dispatch("Shell.Application").Windows():
+_SHELL = None
+
+
+def shell_app():
+    """Oggetto Shell.Application di Windows: creato una volta e poi riusato (ogni volta costa)."""
+    global _SHELL
+    if _SHELL is None:
+        import win32com.client
+        _SHELL = win32com.client.Dispatch("Shell.Application")
+    return _SHELL
+
+
+def _finestre_esplora(hwnd):
+    global _SHELL
+    for tentativo in (1, 2):
         try:
-            if int(w.HWND) == hwnd:
-                candidati.append(w)
+            out = []
+            for w in shell_app().Windows():
+                try:
+                    if int(w.HWND) == hwnd:
+                        out.append(w)
+                except Exception:
+                    pass
+            return out
         except Exception:
-            pass
+            _SHELL = None            # Esplora file riavviato: ricreo l'oggetto
+            if tentativo == 2:
+                raise
+
+
+def cartella_attiva(hwnd):
+    """Cartella aperta nella finestra di Esplora file (o il desktop)."""
+    import win32gui
+    if win32gui.GetClassName(hwnd) in ("Progman", "WorkerW"):
+        d = _cartelle_desktop()
+        return d[0] if d else None
+    try:
+        finestre = _finestre_esplora(hwnd)
+        if len(finestre) > 1:
+            finestre = [_scheda_attiva(hwnd, finestre) or finestre[0]]
+        if finestre:
+            p = finestre[0].Document.Folder.Self.Path
+            return p if os.path.isdir(p) else None
+    except Exception:
+        log(f"--- cartella attiva\n{traceback.format_exc()}")
+    return None
+
+
+def _selezione_esplora(hwnd, cartelle_out):
+    candidati = _finestre_esplora(hwnd)
     if not candidati:
         return []
     scelto = candidati[0]
@@ -927,7 +1747,7 @@ def _selezione_desktop_alt():
     import win32com.client
     import pythoncom
     from win32com.shell import shell as sh, shellcon
-    sw = win32com.client.Dispatch("Shell.Application").Windows()
+    sw = shell_app().Windows()
     loc = win32com.client.VARIANT(pythoncom.VT_I4, shellcon.CSIDL_DESKTOP)
     empty = win32com.client.VARIANT(pythoncom.VT_EMPTY, None)
     disp = sw.FindWindowSW(loc, empty, 8, 0, 1)  # SWC_DESKTOP=8, SWFO_NEEDDISPATCH=1
@@ -976,16 +1796,43 @@ def _tema_scuro_menu():
         pass
 
 
+_DISPONIBILE = {}
+
+
+def disponibile(modulo):
+    """La funzione opzionale e' installata? (controllato una volta sola)"""
+    if modulo not in _DISPONIBILE:
+        try:
+            import importlib.util
+            _DISPONIBILE[modulo] = importlib.util.find_spec(modulo) is not None
+        except Exception:
+            _DISPONIBILE[modulo] = False
+    return _DISPONIBILE[modulo]
+
+
 def voci_per(files):
     """Restituisce [(etichetta, azione) | (etichetta, [sottovoci]) | None per separatore]."""
-    est = {Path(f).suffix.lower() for f in files}
-    if not files or any(os.path.isdir(f) for f in files):
+    if not files:
         return []
+    est = {Path(f).suffix.lower() for f in files}
+    uno = len(files) == 1
+    copia = [("Percorso", "copia_percorso")]
+    archivio = ("Crea archivio", [("ZIP", "crea_zip"), ("7z", "crea_7z")])
+    if any(os.path.isdir(f) for f in files):
+        v = []
+        if uno:
+            v.append(("Trova duplicati qui dentro…", "duplicati"))
+        v.append(archivio)
+        if len(files) > 1:
+            v.append(("Rinomina in blocco…", "rinomina"))
+        v += [None, ("Copia", copia)]
+        return v
     tutte_img = est <= IMG_EXT
     tutte_pdf = est == {".pdf"}
     tutte_arc = est <= ARC_EXT
     tutti_vid = est <= VID_EXT
     tutti_aud = est <= AUD_EXT
+    tutti_office = est <= OFFICE_EXT
 
     def formati(opzioni):
         """Tolgo il formato che i file hanno gia' (inutile convertire MP4 in MP4)."""
@@ -994,39 +1841,74 @@ def voci_per(files):
     if tutte_img:
         v.append(("Converti in", [("PNG", "png"), ("JPG", "jpg"), ("WEBP", "webp"),
                                   ("ICO (icona)", "ico"), None, ("PDF", "img2pdf")]))
-        v.append(("Estrai testo (OCR)", "ocr"))
-        if len(files) == 1:
+        v.append(("Ruota", [("90° a destra", "ruota_dx"), ("90° a sinistra", "ruota_sx"), ("180°", "ruota_180")]))
+        if uno:
             v.append(("Ritaglia e ridimensiona…", "ritaglia"))
         else:
             v.append(("Ridimensiona e comprimi…", "comprimi"))
+            v.append(("Unisci in un'immagine…", "unisci_img"))
+        v.append(None)
+        v.append(("Estrai testo (OCR)", "ocr"))
+        v.append(("Leggi QR code", "qr_leggi"))
         v.append(("Rimuovi metadati (GPS, EXIF)", "metadati"))
-        try:
-            import importlib.util
-            if importlib.util.find_spec("rembg"):
-                v.append(("Rimuovi sfondo (AI)", "sfondo"))
-        except Exception:
-            pass
+        if disponibile("rembg"):
+            v.append(("Rimuovi sfondo (AI)", "sfondo"))
+        if uno:
+            copia.append(("Immagine", "copia_immagine"))
     elif tutte_pdf:
         v += [("Copia testo dal PDF", "pdf_testo"), ("Estrai testo con OCR", "ocr")]
         if len(files) > 1:
             v.append(("Unisci PDF", "pdf_unisci"))
-        v += [("PDF in immagini (PNG)", "pdf_immagini"), ("Comprimi PDF", "pdf_comprimi")]
+        else:
+            v.append(("Dividi o estrai pagine…", "pdf_dividi"))
+            v.append(("Ruota, riordina, elimina pagine…", "pdf_pagine"))
+        v += [("PDF in immagini (PNG)", "pdf_immagini"), ("Comprimi PDF", "pdf_comprimi"),
+              ("Aggiungi o togli password…", "pdf_password")]
+    elif tutti_office:
+        v.append(("Converti in PDF", "office_pdf"))
     elif tutte_arc:
+        v.append(("Estrai qui", "estrai"))
         v.append(("Converti in", [("7z", "to7z"), ("ZIP", "tozip"), ("RAR", "torar")]))
     elif tutti_vid:
         v.append(("Converti in", formati([("MP4", "v_mp4"), ("MKV", "v_mkv"), ("MOV", "v_mov"),
                                           ("WEBM", "v_webm"), None, ("GIF animata", "v_gif")])))
-        v += [("Comprimi video", "v_comprimi"), ("Estrai audio (MP3)", "a_mp3")]
+        if uno:
+            v.append(("Taglia…", "taglia"))
+        v.append(("Comprimi video", "v_comprimi"))
+        v.append(("Estrai audio", [("MP3", "a_mp3"), ("WAV", "a_wav"), ("M4A", "a_m4a"), None,
+                                   ("Originale (senza ricodifica)", "a_orig")]))
+        if disponibile("faster_whisper"):
+            v.append(("Crea sottotitoli (AI)", "sottotitoli"))
     elif tutti_aud:
         v.append(("Converti in", formati([("MP3", "a_mp3"), ("WAV", "a_wav"),
                                           ("M4A", "a_m4a"), ("FLAC", "a_flac")])))
+        if uno:
+            v.append(("Taglia…", "taglia"))
+        if disponibile("faster_whisper"):
+            v.append(("Trascrivi in testo (AI)", "sottotitoli"))
+    elif uno and est <= TXT_EXT | {".url"}:
+        v.append(("Crea QR code…", "qr_crea"))
+    if uno and est <= TXT_EXT:
+        copia.append(("Contenuto (testo)", "copia_testo"))
     if v:
         v.append(None)
+    if len(files) > 1:
+        v.append(("Rinomina in blocco…", "rinomina"))
+    v.append(archivio)
+    v.append(("Copia", copia))
     v.append(("Calcola SHA-256", "hash"))
     return v
 
 
-def mostra_menu(files):
+def voci_cartella():
+    """Menu quando non c'e' niente di selezionato: strumenti che lavorano sulla cartella aperta."""
+    return [("Crea QR code…", "qr_crea"),
+            ("Trova duplicati in questa cartella…", "duplicati"),
+            None,
+            ("Testo da una zona dello schermo   Ctrl+Alt+T", "zona")]
+
+
+def mostra_menu(files, cartella=None):
     import win32gui
     import win32con
     import win32api
@@ -1058,13 +1940,16 @@ def mostra_menu(files):
                 win32gui.AppendMenu(m, win32con.MF_STRING, prossimo[0], voce[0])
                 prossimo[0] += 1
 
-    titolo = Path(files[0]).name if len(files) == 1 else f"{len(files)} file selezionati"
+    if files:
+        titolo = Path(files[0]).name if len(files) == 1 else f"{len(files)} elementi selezionati"
+    else:
+        titolo = Path(cartella).name or str(cartella)
     if len(titolo) > 40:
         titolo = titolo[:37] + "..."
     menu = win32gui.CreatePopupMenu()
     win32gui.AppendMenu(menu, win32con.MF_STRING | win32con.MF_GRAYED, 0, "Sottomano  -  " + titolo)
     win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
-    riempi(menu, voci_per(files))
+    riempi(menu, voci_per(files) if files else voci_cartella())
 
     x, y, _ = posizione_menu()
     # il menu si apre a SINISTRA del file, come un tasto destro "specchiato"
@@ -1104,40 +1989,93 @@ def _attendi_tasti_rilasciati():
         time.sleep(0.02)
 
 
-def _su_hotkey():
+def _su_hotkey(lavoratore):
     import win32gui
     hwnd = win32gui.GetForegroundWindow()
     if win32gui.GetClassName(hwnd) not in ("CabinetWClass", "ExploreWClass", "Progman", "WorkerW"):
         return  # Ctrl+Alt+S premuto in un altro programma: lo ignoro
     files = file_selezionati(hwnd)
-    if not files:
+    cartella = None if files else cartella_attiva(hwnd)
+    if not files and not cartella:
         messaggio("Seleziona prima uno o più file, poi premi Ctrl+Alt+S.")
         return
     _attendi_tasti_rilasciati()
-    azione = mostra_menu(files)
-    if azione:
-        # l'azione gira in un processo separato: il servizio resta sempre pronto
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), azione] + files)
+    azione = mostra_menu(files, cartella)
+    if not azione:
+        return
+    if azione == "copia_percorso":
+        copia_percorso(files)                  # istantaneo: lo faccio qui, senza aprire niente
+        return
+    lavoratore.invia([azione] + (files or ([cartella] if azione != "zona" else [])))
 
 
 def alleggerisci():
-    """Restituisce a Windows la memoria che il servizio non sta usando (come fa Windows con i
-    programmi ridotti a icona). Il servizio resta pronto: se serve, la memoria torna subito."""
+    """Pulizia leggera dopo un po' che non usi Sottomano. Non 'svuoto' piu' la memoria del processo
+    (SetProcessWorkingSetSize): Windows doveva poi ricaricarla dal disco a ogni Ctrl+Alt+S o Spazio,
+    e sui PC lenti si sentiva. Ci pensa gia' Windows, se la memoria serve ad altri programmi."""
     import gc
-    import ctypes
-    from ctypes import wintypes
     gc.collect()
-    try:
-        k = ctypes.windll.kernel32
-        k.GetCurrentProcess.restype = wintypes.HANDLE
-        k.SetProcessWorkingSetSize.argtypes = [wintypes.HANDLE, ctypes.c_size_t, ctypes.c_size_t]
-        k.SetProcessWorkingSetSize(k.GetCurrentProcess(), ctypes.c_size_t(-1), ctypes.c_size_t(-1))
-    except Exception:
-        pass
 
 
-TIMER_RIPOSO = 78          # dopo 30 secondi senza usare Sottomano libero la memoria
+TIMER_RIPOSO = 78          # dopo 30 secondi senza usare Sottomano faccio pulizia
 RIPOSO_MS = 30_000
+TIMER_PRONTO = 79          # quando ripreparare il processo pronto
+# sempre pythonw (senza finestra nera), anche se il servizio fosse stato avviato con python.exe
+PYTHONW = str(Path(sys.executable).with_name("pythonw.exe")) \
+    if Path(sys.executable).with_name("pythonw.exe").exists() else sys.executable
+
+
+class Lavoratore:
+    """Un processo Python gia' avviato che aspetta, fermo e senza usare CPU, il prossimo lavoro.
+
+    Avviare Python, Tk, Pillow e PyMuPDF costa da mezzo secondo a qualche secondo sui PC lenti:
+    lo faccio PRIMA che tu prema Spazio o scelga un'azione, cosi' quando serve la finestra si apre subito.
+    Ogni processo pronto viene usato una volta sola (poi si chiude come prima); subito dopo ne preparo
+    un altro. Se per qualche motivo non e' pronto, avvio un processo normale come facevo prima."""
+
+    def __init__(self, hwnd):
+        self.hwnd = hwnd
+        self.proc = None
+
+    def prepara(self):
+        import ctypes
+        ctypes.windll.user32.KillTimer(self.hwnd, TIMER_PRONTO)
+        if self.proc is not None and self.proc.poll() is None:
+            return
+        try:
+            self.proc = subprocess.Popen([PYTHONW, str(SCRIPT), "pronto"], stdin=subprocess.PIPE,
+                                         cwd=str(BASE), creationflags=0x00004000)   # priorita' bassa mentre carica
+        except Exception:
+            self.proc = None
+            log(f"--- prepara\n{traceback.format_exc()}")
+
+    def prepara_tra(self, ms):
+        import ctypes
+        ctypes.windll.user32.SetTimer(self.hwnd, TIMER_PRONTO, ms, None)
+
+    def invia(self, comando):
+        import ctypes
+        p, self.proc = self.proc, None
+        inviato = False
+        if p is not None and p.poll() is None:
+            try:
+                ctypes.windll.user32.AllowSetForegroundWindow(p.pid)   # la sua finestra puo' venire in primo piano
+                p.stdin.write((json.dumps(comando) + "\n").encode("utf-8"))
+                p.stdin.close()
+                inviato = True
+            except OSError:
+                pass
+        if not inviato:
+            subprocess.Popen([PYTHONW, str(SCRIPT), *comando], cwd=str(BASE))
+        self.prepara_tra(800)    # il prossimo lo preparo dopo, per non rallentare quello che si sta aprendo
+
+    def chiudi(self):
+        p, self.proc = self.proc, None
+        if p is not None:
+            try:
+                p.stdin.close()   # il processo pronto legge "fine" e si chiude da solo
+            except OSError:
+                pass
 
 
 class SpazioAnteprima:
@@ -1233,7 +2171,7 @@ class SpazioAnteprima:
             return self._classe(self.u.GetParent(gi.hwndFocus)) == "SHELLDLL_DefView"
         return False
 
-    def premuto(self):
+    def premuto(self, lavoratore):
         fg = self.u.GetForegroundWindow()
         if not self._focus_su_elenco_file(fg):
             self._ripassa_spazio()
@@ -1242,8 +2180,7 @@ class SpazioAnteprima:
         if not files:
             self._ripassa_spazio()
             return
-        ant = Path(__file__).resolve().parent / "anteprima.pyw"
-        subprocess.Popen([sys.executable, str(ant), files[0]])
+        lavoratore.invia(["anteprima", files[0]])
 
 
 def ascolta():
@@ -1259,11 +2196,14 @@ def ascolta():
         return
 
     WM_TRAY = win32con.WM_USER + 20
-    ID_HOTKEY, ID_SPAZIO, ID_ESCI = 1, 2, 1000
+    ID_HOTKEY, ID_SPAZIO, ID_ZONA, ID_ESCI, ID_TESTO = 1, 2, 3, 1000, 1001
+    lavoratore = None
 
     def menu_icona(hwnd):
         m = win32gui.CreatePopupMenu()
         win32gui.AppendMenu(m, win32con.MF_STRING | win32con.MF_GRAYED, 0, f"Sottomano {VERSIONE}  ·  Ctrl+Alt+{TASTO} menu  ·  Spazio anteprima")
+        win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
+        win32gui.AppendMenu(m, win32con.MF_STRING, ID_TESTO, "Testo da una zona dello schermo\tCtrl+Alt+T")
         win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
         win32gui.AppendMenu(m, win32con.MF_STRING, ID_ESCI, "Esci")
         x, y = win32gui.GetCursorPos()
@@ -1273,6 +2213,8 @@ def ascolta():
         win32gui.DestroyMenu(m)
         if scelta == ID_ESCI:
             win32gui.DestroyWindow(hwnd)
+        elif scelta == ID_TESTO:
+            lavoratore.invia(["zona"])
 
     def on_tray(hwnd, msg, wparam, lparam):
         if lparam in (win32con.WM_RBUTTONUP, win32con.WM_LBUTTONUP):
@@ -1282,9 +2224,11 @@ def ascolta():
     def on_hotkey(hwnd, msg, wparam, lparam):
         try:
             if wparam == ID_SPAZIO:
-                spazio.premuto()
+                spazio.premuto(lavoratore)
+            elif wparam == ID_ZONA:
+                lavoratore.invia(["zona"])
             else:
-                _su_hotkey()
+                _su_hotkey(lavoratore)
         except Exception:
             log(f"--- hotkey {wparam}\n{traceback.format_exc()}")
         ctypes.windll.user32.SetTimer(hwnd, TIMER_RIPOSO, RIPOSO_MS, None)   # riparte il conto alla rovescia
@@ -1293,7 +2237,11 @@ def ascolta():
     def on_destroy(hwnd, msg, wparam, lparam):
         import ctypes
         ctypes.windll.user32.UnregisterHotKey(hwnd, ID_HOTKEY)
-        spazio.spegni()
+        ctypes.windll.user32.UnregisterHotKey(hwnd, ID_ZONA)
+        if spazio is not None:
+            spazio.spegni()
+        if lavoratore is not None:
+            lavoratore.chiudi()
         try:
             win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (hwnd, 0))
         except Exception:
@@ -1311,6 +2259,8 @@ def ascolta():
         elif wparam == TIMER_RIPOSO:
             ctypes.windll.user32.KillTimer(hwnd, TIMER_RIPOSO)
             alleggerisci()
+        elif wparam == TIMER_PRONTO:
+            lavoratore.prepara()
         return 0
 
     _tema_scuro_menu()
@@ -1328,6 +2278,8 @@ def ascolta():
         messaggio(f"La combinazione Ctrl+Alt+{TASTO} è già usata da un altro programma.")
         win32gui.DestroyWindow(hwnd)
         return
+    if not ctypes.windll.user32.RegisterHotKey(hwnd, ID_ZONA, MOD_ALT | MOD_CONTROL | MOD_NOREPEAT, ord("T")):
+        log("--- Ctrl+Alt+T gia' usata da un altro programma: la zona dello schermo resta nel menu dell'icona")
 
     icona = win32gui.LoadIcon(0, win32con.IDI_APPLICATION)
     try:
@@ -1339,8 +2291,93 @@ def ascolta():
                                                  WM_TRAY, icona, f"Sottomano - Ctrl+Alt+{TASTO}, Spazio = anteprima"))
     spazio = SpazioAnteprima(hwnd, ID_SPAZIO)
     spazio.avvia()
-    alleggerisci()            # all'avvio: via la memoria usata solo per partire
+    lavoratore = Lavoratore(hwnd)
+    lavoratore.prepara_tra(2500)   # il primo processo pronto parte dopo qualche secondo (non rallenta l'avvio)
     win32gui.PumpMessages()
+
+
+SCRIPT = Path(__file__).resolve()
+
+
+def esegui(azione, files):
+    if azione == "anteprima":
+        apri_anteprima(files[0])
+        return
+    try:
+        msg = AZIONI[azione](files)
+        if msg:
+            info(msg)
+    except Exception as e:
+        log(f"\n--- {azione} {files}\n{traceback.format_exc()}")
+        errore(f"{e}\n\nDettagli in: {LOG}")
+
+
+def _modulo_anteprima():
+    """anteprima.pyw caricato come modulo (Python ne tiene la versione compilata: si apre prima)."""
+    import importlib.util
+    import importlib.machinery
+    if "anteprima" in sys.modules:
+        return sys.modules["anteprima"]
+    loader = importlib.machinery.SourceFileLoader("anteprima", str(BASE / "anteprima.pyw"))
+    spec = importlib.util.spec_from_loader("anteprima", loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["anteprima"] = mod
+    loader.exec_module(mod)
+    return mod
+
+
+def apri_anteprima(path):
+    mod = _modulo_anteprima()
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Sottomano.Anteprima")
+    except Exception:
+        pass
+    try:
+        if os.path.exists(path):
+            mod.Anteprima(path)
+    finally:
+        os._exit(0)
+
+
+def pronto():
+    """Processo pre-avviato (vedi Lavoratore): carica tutto in anticipo, poi aspetta il comando."""
+    nitido()
+    import tkinter as tk
+    from PIL import Image, ImageTk, ImageOps, ImageDraw   # noqa: F401  (caricati ora, usati dopo)
+    # PyMuPDF NON lo precarico: da solo occupa ~100 MB. Per le anteprime basta PDFium (17 MB).
+    for nome in ("pypdfium2", "comtypes.client", "win32com.client"):
+        try:
+            __import__(nome)
+        except Exception:
+            pass
+    try:
+        _modulo_anteprima()
+        import ritaglia, strumenti   # noqa: F401
+    except Exception:
+        log(f"--- pronto\n{traceback.format_exc()}")
+    root = tk.Tk()           # la finestra di Tk, nascosta: la usera' il prossimo lavoro
+    root.withdraw()
+    try:
+        ingresso = sys.stdin.buffer
+    except AttributeError:
+        ingresso = os.fdopen(0, "rb")
+    try:
+        riga = ingresso.readline()
+    except Exception:
+        riga = b""
+    if not riga.strip():
+        os._exit(0)          # il servizio si e' chiuso: chiudo anche io
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x20)  # normale
+    except Exception:
+        pass
+    comando = json.loads(riga.decode("utf-8"))
+    try:
+        esegui(comando[0], comando[1:])
+    finally:
+        os._exit(0)
 
 
 def main():
@@ -1350,10 +2387,20 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Sottomano")
     except Exception:
         pass
-    if len(sys.argv) >= 2 and sys.argv[1] == "ascolta":
+    modo = sys.argv[1] if len(sys.argv) >= 2 else ""
+    if modo == "ascolta":
+        try:
+            import ctypes
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))   # menu nitidi (Per-Monitor v2)
+        except Exception:
+            nitido()
         ascolta()
         return
-    if len(sys.argv) >= 2 and sys.argv[1] == "menu":
+    if modo == "pronto":
+        pronto()
+        return
+    nitido()
+    if modo == "menu":
         try:
             files = file_selezionati()
         except Exception:
@@ -1363,28 +2410,19 @@ def main():
             info("Non riesco a leggere i file selezionati.\nSeleziona uno o più file in Esplora file o sul desktop e premi Ctrl+Alt+S.\n\nSe succede ancora, mandami il file:\n" + str(LOG))
             return
         try:
-            azione = mostra_menu(files)
+            modo = mostra_menu(files)
         except Exception as e:
-            with open(LOG, "a", encoding="utf-8") as fh:
-                fh.write(f"\n--- menu {files}\n{traceback.format_exc()}")
+            log(f"\n--- menu {files}\n{traceback.format_exc()}")
             errore(f"{e}\n\nDettagli in: {LOG}")
             return
-        if not azione:
+        if not modo:
             return
-        sys.argv = [sys.argv[0], azione] + files
-
-    if len(sys.argv) < 3 or sys.argv[1] not in AZIONI:
+        sys.argv = [sys.argv[0], modo] + files
+    files = [f for f in sys.argv[2:] if f.strip()]
+    if modo != "anteprima" and (modo not in AZIONI or (not files and modo not in SENZA_FILE)):
         errore("Uso: sottomano.pyw <azione> file...\nAzioni: " + ", ".join(AZIONI))
         return
-    azione, files = sys.argv[1], [f for f in sys.argv[2:] if f.strip()]
-    try:
-        msg = AZIONI[azione](files)
-        if msg:
-            info(msg)
-    except Exception as e:
-        with open(LOG, "a", encoding="utf-8") as fh:
-            fh.write(f"\n--- {azione} {files}\n{traceback.format_exc()}")
-        errore(f"{e}\n\nDettagli in: {LOG}")
+    esegui(modo, files)
 
 
 if __name__ == "__main__":

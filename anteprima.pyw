@@ -166,6 +166,22 @@ def icona_file(path, size=32):
 
 # -------------------------------------------------- contenuti per tipo di file
 def pagina_pdf(path, lato=1400):
+    """Prima pagina del PDF. Uso PDFium (il motore PDF di Chrome): si carica in un attimo e con poca
+    memoria; PyMuPDF solo se PDFium manca."""
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        pdfium = None
+    if pdfium is not None:
+        pdf = pdfium.PdfDocument(str(path))
+        try:
+            pag = pdf[0]
+            w, h = pag.get_size()
+            img = pag.render(scale=lato / max(w, h)).to_pil().convert("RGB")
+            pag.close()
+            return img, len(pdf)
+        finally:
+            pdf.close()
     try:
         import pymupdf as fitz
     except ImportError:
@@ -418,7 +434,8 @@ class Anteprima:
         self._video_after = None
         self.barra = None
 
-        self.root = tk.Tk()
+        r = getattr(tk, "_default_root", None)     # processo pre-avviato: Tk e' gia' pronto
+        self.root = r if r is not None and not r.winfo_children() else tk.Tk()
         self.root.withdraw()
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
@@ -454,13 +471,23 @@ class Anteprima:
 
     def _vicini(self, path):
         """File e cartelle nella stessa cartella, ordinati come in Esplora file (cartelle prima)."""
+        import re
+
+        def naturale(nome):
+            return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", nome)]
+        cart, file = [], []
         try:
-            voci = list(path.parent.iterdir())
+            # scandir sa gia' se una voce e' una cartella: niente lettura dal disco file per file
+            with os.scandir(path.parent) as it:
+                for e in it:
+                    try:
+                        (cart if e.is_dir() else file).append(e.name)
+                    except OSError:
+                        file.append(e.name)
         except OSError:
             return [path]
-        cart = sorted((p for p in voci if p.is_dir()), key=lambda p: p.name.lower())
-        file = sorted((p for p in voci if not p.is_dir()), key=lambda p: p.name.lower())
-        return cart + file or [path]
+        base = path.parent
+        return [base / n for n in sorted(cart, key=naturale) + sorted(file, key=naturale)] or [path]
 
     def vai(self, passo):
         if len(self.vicini) < 2:
@@ -752,8 +779,12 @@ class Anteprima:
             elif ext in VID_EXT:
                 self._mostra_video(self.path)
             elif ext == ".pdf":
-                img, _ = pagina_pdf(self.path)
-                self._mostra_immagine(img)
+                try:
+                    img, _ = pagina_pdf(self.path)
+                except Exception:
+                    self._scheda_file(nota="PDF · protetto da password o danneggiato")
+                else:
+                    self._mostra_immagine(img)
             elif ext in ARC_EXT:
                 voci, n, tot = contenuto_archivio(self.path)
                 self._scheda_file() if voci is None else self._mostra_elenco(voci, n, tot)
