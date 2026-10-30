@@ -1482,9 +1482,10 @@ def elenco_bloccati(leggi_voci, apri, completo, ricrea):
             sx = tk.Frame(riga, bg=BARRA)
             sx.pack(side="left", fill="x", expand=True, padx=int(12 * k), pady=int(8 * k))
             stato = "Bloccato" if v["stato"] == "bloccato" else "Aperto (si richiude quando lo chiudi)"
-            tk.Label(sx, text=("📁  " if v.get("cartella") else "📄  ") + dove.name, bg=BARRA, fg=FG,
+            tk.Label(sx, text=dove.name, bg=BARRA, fg=FG,
                      font=("Segoe UI", 10, "bold"), anchor="w").pack(anchor="w")
-            tk.Label(sx, text=f"{stato}  ·  in {dove.parent}", bg=BARRA, fg=SUB, font=("Segoe UI", 8),
+            tipo = "Cartella" if v.get("cartella") else "File"
+            tk.Label(sx, text=f"{tipo}  ·  {stato}  ·  in {dove.parent}", bg=BARRA, fg=SUB, font=("Segoe UI", 8),
                      anchor="w").pack(anchor="w")
             dx = tk.Frame(riga, bg=BARRA)
             dx.pack(side="right", padx=int(10 * k))

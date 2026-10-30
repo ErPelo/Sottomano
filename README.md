@@ -87,7 +87,7 @@ irm erpelo.github.io/Sottomano | iex
 Oppure dal **Prompt dei comandi** (Start → scrivi *cmd* → Invio):
 
 ```bat
-cd /d %TEMP% && curl -L -o sottomano.zip https://github.com/ErPelo/Sottomano/archive/refs/heads/main.zip && tar -xf sottomano.zip && Sottomano-main\installa.bat
+cd /d "%TEMP%" && curl -fL -o sottomano.zip https://github.com/ErPelo/Sottomano/archive/refs/heads/main.zip && tar -xf sottomano.zip && Sottomano-main\installa.bat
 ```
 
 Entrambi scaricano l'ultima versione da questo repository e avviano `installa.bat`: lo stesso comando serve per installare e per aggiornare. Lo script che PowerShell esegue è [`docs/index.html`](docs/index.html) (è anche la pagina che vedi aprendo il link nel browser): poche righe, leggibili.

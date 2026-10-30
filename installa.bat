@@ -11,9 +11,9 @@ set "REG=%SM%\installato.txt"
 echo.
 echo === 1/2  Programmi necessari (tramite winget, l'installer ufficiale di Windows) ===
 where winget >nul 2>nul || (echo winget non trovato: aggiorna "Programma di installazione app" dal Microsoft Store. & pause & exit /b 1)
-call :programma Python.Python.3.12 "Python 3.12" --scope user
-call :programma 7zip.7zip "7-Zip"
-call :programma UB-Mannheim.TesseractOCR "Tesseract OCR"
+call :programma Python.Python.3.12 "Python 3.12" "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" --scope user
+call :programma 7zip.7zip "7-Zip" "%ProgramFiles%\7-Zip\7z.exe"
+call :programma UB-Mannheim.TesseractOCR "Tesseract OCR" "%ProgramFiles%\Tesseract-OCR\tesseract.exe"
 
 set "PY="
 rem Uso sempre Python 3.12: e' quello che installa.bat garantisce, con tutte le librerie
@@ -28,9 +28,11 @@ pause
 exit /b
 
 :programma
+rem prima guardo se il programma c'e' gia' (istantaneo); solo se non lo trovo chiedo a winget (lento)
+if exist "%~3" (echo   %~2 gia' presente: non lo tocco& exit /b)
 winget list --id %1 -e --accept-source-agreements >nul 2>nul && (echo   %~2 gia' presente: non lo tocco& exit /b)
 echo   Installo %~2...
-winget install --id %1 -e --accept-package-agreements --accept-source-agreements %3 %4
+winget install --id %1 -e --accept-package-agreements --accept-source-agreements %4 %5
 rem lo segno nel registro solo se l'ha installato davvero Sottomano
 winget list --id %1 -e --accept-source-agreements >nul 2>nul && >>"%REG%" echo winget %1
 exit /b
